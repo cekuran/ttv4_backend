@@ -209,6 +209,27 @@ function getActiveTimer() {
   const raw = PropertiesService.getUserProperties().getProperty('activeTimer');
   return raw ? JSON.parse(raw) : null;
 }
+
+// ponytail: diagnostics — run from the editor to inspect the sheet's raw state
+function dumpTimeEntries() {
+  const s = ss_().getSheetByName('TimeEntries');
+  if (!s) return 'No TimeEntries sheet';
+  const data = s.getDataRange().getValues();
+  return JSON.stringify({
+    sheetName: 'TimeEntries',
+    lastRow: s.getLastRow(),
+    headerRow: data[0],
+    sample: data.slice(1, 4),
+    types: data[1] ? data[1].map((v, i) => `[${i}] ${data[0][i]}: ${v === null ? 'null' : typeof v} (${v instanceof Date ? 'Date' : String(v).slice(0, 40)})`) : []
+  }, null, 2);
+}
+
+function resetTimeEntries() {
+  const s = ss_().getSheetByName('TimeEntries');
+  if (!s) return 'No TimeEntries sheet';
+  if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
+  return 'Cleared all entries';
+}
 function startTimer(taskId) {
   const t = { taskId, startTime: iso_() };
   PropertiesService.getUserProperties().setProperty('activeTimer', JSON.stringify(t));
