@@ -210,7 +210,8 @@ function rebaseEntries(offsetHours) {
 // --- Timer (per-user, per-script via UserProperties) ---
 function getActiveTimer() {
   const raw = PropertiesService.getUserProperties().getProperty('activeTimer');
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
 // ponytail: diagnostics — run from the editor to inspect the sheet's raw state
