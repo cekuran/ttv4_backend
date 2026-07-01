@@ -151,6 +151,20 @@ const fmtHMS = (ms) => {
   const s = Math.max(0, Math.floor(ms/1000));
   return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
 };
+const fmtTime = (iso) => {
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false});
+};
+const fmtDate = (iso) => {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString();
+};
+const toLocalInput = (d) => {
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isoDate = (d) => new Date(d).toISOString().slice(0,10);
 
@@ -310,6 +324,13 @@ function renderLog() {
   // defaults: last 30 days
   if (!$('#log-from').value) $('#log-from').value = isoDate(Date.now() - 30*86400000);
   if (!$('#log-to').value)   $('#log-to').value   = isoDate(Date.now());
+  // defaults for manual entry: last hour to now
+  if (!$('#manual-start').value || !$('#manual-end').value) {
+    const now = new Date();
+    const start = new Date(Math.floor((now.getTime() - 3600000) / 900000) * 900000);
+    $('#manual-start').value = toLocalInput(start);
+    $('#manual-end').value = toLocalInput(now);
+  }
 
   const from = $('#log-from').value;
   const to   = $('#log-to').value;
@@ -342,11 +363,11 @@ function renderLog() {
   filtered.forEach(e => {
     const lid = taskLabelId(e.taskId);
     html += `<tr>
-      <td>${new Date(e.startTime).toLocaleDateString()}</td>
+      <td>${fmtDate(e.startTime)}</td>
       <td>${escapeHtml(taskName(e.taskId))}</td>
       <td>${lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '<span style="color:#80868b">—</span>'}</td>
-      <td>${new Date(e.startTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-      <td>${new Date(e.endTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+      <td>${fmtTime(e.startTime)}</td>
+      <td>${fmtTime(e.endTime)}</td>
       <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
       <td style="color:#5f6368; font-size:12px;">${escapeHtml(e.source || '')}</td>
       <td><button class="del" data-id="${e.id}">Delete</button></td>
