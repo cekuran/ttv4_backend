@@ -178,6 +178,11 @@ const parseLocalInput = (v) => {
 };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isoDate = (d) => new Date(d).toISOString().slice(0,10);
+// Local (not UTC) yyyy-mm-dd — for date-range defaults so bounds match how entries are compared/displayed
+const localDay = (d) => {
+  const x = new Date(d), p = n => String(n).padStart(2,'0');
+  return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())}`;
+};
 
 function taskById(id)    { return state.tasks.find(t => t.id === id); }
 function taskName(id)    { const t = taskById(id); return t ? t.name : '(deleted)'; }
@@ -332,9 +337,9 @@ function renderActivePill() {
 function renderLog() {
   populateTaskSelect($('#log-task'), 'All tasks');
   populateLabelSelect($('#log-label'), 'All labels');
-  // defaults: last 30 days
-  if (!$('#log-from').value) $('#log-from').value = isoDate(Date.now() - 30*86400000);
-  if (!$('#log-to').value)   $('#log-to').value   = isoDate(Date.now());
+  // defaults: last 30 days (local dates so they line up with entry timestamps)
+  if (!$('#log-from').value) $('#log-from').value = localDay(Date.now() - 30*86400000);
+  if (!$('#log-to').value)   $('#log-to').value   = localDay(Date.now());
   // defaults for manual entry: last hour to now
   if (!$('#manual-start').value || !$('#manual-end').value) {
     const now = new Date();
@@ -348,13 +353,15 @@ function renderLog() {
   const taskFilter  = $('#log-task').value;
   const labelFilter = $('#log-label').value;
 
-  const toEnd = to ? new Date(to) : null;
-  if (toEnd) toEnd.setHours(23,59,59,999);
+  // Build both bounds in LOCAL time so they match the entry instants we compare against.
+  const fromStart = from ? parseLocalInput(from + 'T00:00') : null;
+  const toEnd     = to   ? parseLocalInput(to   + 'T23:59') : null;
+  if (toEnd) toEnd.setSeconds(59, 999);
 
   const filtered = state.entries
     .filter(e => {
       const d = new Date(e.startTime);
-      if (from && d < new Date(from)) return false;
+      if (fromStart && d < fromStart) return false;
       if (toEnd && d > toEnd) return false;
       if (taskFilter && e.taskId !== taskFilter) return false;
       if (labelFilter && taskLabelId(e.taskId) !== labelFilter) return false;
