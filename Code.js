@@ -23,6 +23,7 @@ function setSpreadsheetId(id) {
 
 function ensureSchema_() {
   const ss = ss_();
+  const txtCols = new Set(['startTime', 'endTime', 'createdAt']);
   Object.entries(SHEETS).forEach(([name, headers]) => {
     let s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name);
@@ -30,6 +31,10 @@ function ensureSchema_() {
       s.getRange(1, 1, 1, headers.length).setValues([headers]);
       s.setFrozenRows(1);
     }
+    // ponytail: keep time columns as plain text so Sheets doesn't reinterpret ISO as a Date cell on read
+    headers.forEach((h, i) => {
+      if (txtCols.has(h)) s.getRange(2, i+1, s.getMaxRows()-1, 1).setNumberFormat('@');
+    });
   });
 }
 
@@ -63,7 +68,13 @@ function readRows_(name) {
 function appendRow_(name, obj) {
   const s = ss_().getSheetByName(name);
   const headers = s.getDataRange().getValues()[0];
-  const row = headers.map(h => obj[h] !== undefined ? obj[h] : '');
+  // ponytail: stringify Date values so plain-text columns keep them as ISO, not auto-converted back to Date cells
+  const row = headers.map(h => {
+    const v = obj[h];
+    if (v === undefined) return '';
+    if (v instanceof Date) return v.toISOString();
+    return v;
+  });
   s.appendRow(row);
 }
 
@@ -176,6 +187,32 @@ function createEntry(payload) {
 function deleteEntry(id) {
   deleteRow_('TimeEntries', id);
   return getEntries();
+}
+
+// ponytail: one-shot rebaser for entries stored under the buggy ISO parser — run from the editor with your local UTC offset (PDT = +7, UTC = 0)
+function rebaseEntries(offsetHours) {
+  const s = ss_().getSheetByName('TimeEntries');
+  if (!s || s.getLastRow() <= 1) return 'No entries';
+  const offsetMs = offsetHours * 3600000;
+  const data = s.getDataRange().getValues();
+  const headers = data[0];
+  const startI = headers.indexOf('startTime');
+  const endI   = headers.indexOf('endTime');
+  let count = 0;
+  for (let i = 1; i < data.length; i++) {
+    let changed = false;
+    if (data[i][startI] instanceof Date) {
+      data[i][startI] = new Date(data[i][startI].getTime() + offsetMs).toISOString();
+      changed = true;
+    }
+    if (data[i][endI] instanceof Date) {
+      data[i][endI] = new Date(data[i][endI].getTime() + offsetMs).toISOString();
+      changed = true;
+    }
+    if (changed) count++;
+  }
+  s.getRange(1, 1, data.length, headers.length).setValues(data);
+  return `Rebased ${count} entr${count === 1 ? 'y' : 'ies'} by ${offsetHours}h`;
 }
 
 // --- Timer (per-user, per-script via UserProperties) ---
