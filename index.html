@@ -154,12 +154,17 @@ const fmtHMS = (ms) => {
 const fmtTime = (iso) => {
   const d = new Date(iso);
   if (isNaN(d)) return '—';
-  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false});
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  return `${hh}:${mm}`;
 };
 const fmtDate = (iso) => {
   const d = new Date(iso);
   if (isNaN(d)) return '';
-  return d.toLocaleDateString();
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${dd}/${mm}/${yy}`;
 };
 const toLocalInput = (d) => {
   const p = n => String(n).padStart(2,'0');
