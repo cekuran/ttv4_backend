@@ -45,6 +45,17 @@
   .empty { text-align: center; padding: 40px; color: #80868b; }
   canvas { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); }
   h3.section { margin: 24px 0 12px; font-size: 13px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.4px; }
+  .fold-btn { background: none; color: #5f6368; border: 0; cursor: pointer; font-size: 11px; padding: 2px 6px; width: 24px; line-height: 1; }
+  .fold-btn:hover { background: #f1f3f4; color: #1a73e8; border-radius: 4px; }
+  .fold-btn[disabled] { color: #dadce0; cursor: default; background: none; }
+  .task-total { font-variant-numeric: tabular-nums; }
+  .task-total.zero { color: #80868b; font-weight: normal; }
+  tr.task-entries > td { background: #f8f9fa; padding: 4px 12px 12px; }
+  table.entries-sub { width: 100%; border-collapse: collapse; }
+  table.entries-sub th, table.entries-sub td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eceff1; font-size: 13px; }
+  table.entries-sub th { color: #80868b; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+  table.entries-sub tr:last-child td { border-bottom: 0; }
+  table.entries-sub .none { color: #80868b; }
 </style>
 </head>
 <body>
@@ -445,10 +456,19 @@ async function renderTasksView() {
     $('#task-table-wrap').innerHTML = `<div class="empty">No tasks yet. Add one above.</div>`;
     return;
   }
-  let html = `<table class="data"><thead><tr><th style="width:50%">Task</th><th>Label</th><th style="width:60px"></th></tr></thead><tbody>`;
+
+  // Group logged entries by task (newest first) and total minutes per task
+  const byTask = {};
+  state.entries.forEach(e => { (byTask[e.taskId] = byTask[e.taskId] || []).push(e); });
+  Object.values(byTask).forEach(list => list.sort((a,b) => new Date(b.startTime) - new Date(a.startTime)));
+
+  let html = `<table class="data"><thead><tr><th style="width:32px"></th><th style="width:45%">Task</th><th>Label</th><th style="width:110px">Total logged</th><th style="width:60px"></th></tr></thead><tbody>`;
   state.tasks.forEach(t => {
     const lid = t.labelId || '';
+    const entries = byTask[t.id] || [];
+    const total = entries.reduce((s,e) => s + Number(e.durationMinutes || 0), 0);
     html += `<tr>
+      <td><button class="fold-btn" data-id="${t.id}" ${entries.length ? '' : 'disabled'}>▸</button></td>
       <td><input data-id="${t.id}" class="edit-name" value="${escapeHtml(t.name)}"></td>
       <td>
         <select data-id="${t.id}" class="edit-label">
@@ -456,11 +476,37 @@ async function renderTasksView() {
           ${state.labels.map(l => `<option value="${l.id}" ${l.id===lid?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
         </select>
       </td>
+      <td class="task-total${total ? '' : ' zero'}"><b>${fmtHM(total)}</b> · ${entries.length} entr${entries.length===1?'y':'ies'}</td>
       <td><button class="del" data-id="${t.id}">Delete</button></td>
+    </tr>`;
+    const rows = entries.length
+      ? entries.map(e => `<tr>
+          <td>${fmtDate(e.startTime)}</td>
+          <td>${fmtTime(e.startTime)}</td>
+          <td>${fmtTime(e.endTime)}</td>
+          <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
+          <td style="color:#5f6368;">${escapeHtml(e.notes || '')}</td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" class="none">No entries logged yet.</td></tr>`;
+    html += `<tr class="task-entries" id="task-entries-${t.id}" hidden>
+      <td colspan="5">
+        <table class="entries-sub">
+          <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </td>
     </tr>`;
   });
   html += '</tbody></table>';
   $('#task-table-wrap').innerHTML = html;
+
+  $$('#task-table-wrap .fold-btn').forEach(b => b.onclick = () => {
+    if (b.disabled) return;
+    const row = $(`#task-entries-${b.dataset.id}`);
+    if (!row) return;
+    row.hidden = !row.hidden;
+    b.textContent = row.hidden ? '▸' : '▾';
+  });
 
   $$('#task-table-wrap .edit-name').forEach(inp => inp.onchange = async () => {
     state.tasks = await gs('updateTask', inp.dataset.id, { name: inp.value });
