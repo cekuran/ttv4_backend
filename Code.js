@@ -52,9 +52,12 @@ function readRows_(name) {
   return values.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i]; });
-    obj.createdAt = toIso_(obj.createdAt);
-    obj.startTime = toIso_(obj.startTime);
-    obj.endTime   = toIso_(obj.endTime);
+    // ponytail: stringify every value — a Date sneaking into google.script.run's response causes "deserialize threw error"
+    Object.keys(obj).forEach(k => {
+      const v = obj[k];
+      if (v instanceof Date) obj[k] = v.toISOString();
+      else if (v === null || v === undefined) obj[k] = '';
+    });
     obj.durationMinutes = Number(obj.durationMinutes) || 0;
     return obj;
   });
