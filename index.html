@@ -71,6 +71,7 @@
     <div class="panel">
       <h3>Start a timer</h3>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select id="timer-label-filter" style="min-width:160px;"></select>
         <select id="timer-task" style="min-width:240px; flex:1;"></select>
         <button id="start-btn">Start</button>
       </div>
@@ -189,6 +190,25 @@ function populateLabelSelect(sel, placeholder) {
   });
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
+function populateTimerTaskSelect() {
+  const filter = $('#timer-label-filter').value;
+  const sel = $('#timer-task');
+  const prev = sel.value;
+  const visible = filter ? state.tasks.filter(t => t.labelId === filter) : state.tasks;
+  sel.innerHTML = '';
+  if (visible.length === 0) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '— no tasks —'; o.disabled = true; o.selected = true;
+    sel.appendChild(o);
+  } else {
+    visible.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id; o.textContent = t.name;
+      sel.appendChild(o);
+    });
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }
+}
 
 const PALETTE_C = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','#FF6D00','#7B1FA2'];
 
@@ -229,10 +249,12 @@ function bindGlobal() {
     renderLog();
   });
   ['stats-range','stats-group'].forEach(id => $('#'+id).addEventListener('change', renderStats));
+  $('#timer-label-filter').addEventListener('change', populateTimerTaskSelect);
 }
 
 function refreshAll() {
-  populateTaskSelect($('#timer-task'));
+  populateLabelSelect($('#timer-label-filter'), 'All labels');
+  populateTimerTaskSelect();
   populateTaskSelect($('#manual-task'));
   renderActivePill();
   renderLog();
@@ -465,6 +487,7 @@ async function onLabelCreate(e) {
   $('#label-name').value = '';
   state.labels = await gs('getLabels');
   renderLabelsView();
+  refreshAll();
 }
 
 // ==== Stats ====
