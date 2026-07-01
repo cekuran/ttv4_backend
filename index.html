@@ -103,6 +103,7 @@
     <form class="panel" id="task-form">
       <input id="task-name" placeholder="Task name" required style="flex:1; min-width:240px;">
       <select id="task-label"><option value="">No label</option></select>
+      <input id="task-new-label" placeholder="…or new label name" style="min-width:160px;">
       <button type="submit">Add task</button>
     </form>
     <div id="task-table-wrap"></div>
@@ -397,8 +398,16 @@ async function onTaskCreate(e) {
   e.preventDefault();
   const name = $('#task-name').value.trim();
   if (!name) return;
-  await gs('createTask', name, $('#task-label').value);
+  let labelId = $('#task-label').value;
+  const newLabelName = $('#task-new-label').value.trim();
+  if (newLabelName) {
+    state.labels = await gs('createLabel', newLabelName);
+    const fresh = state.labels.find(l => l.name === newLabelName);
+    labelId = fresh ? fresh.id : '';
+  }
+  await gs('createTask', name, labelId);
   $('#task-name').value = '';
+  $('#task-new-label').value = '';
   state.tasks = await gs('getTasks');
   renderTasksView();
   refreshAll();
