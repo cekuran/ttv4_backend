@@ -49,10 +49,9 @@ function readRows_(name) {
   if (!s || s.getLastRow() <= 1) return [];
   const values = s.getDataRange().getValues();
   const headers = values[0];
-  return values.slice(1).map(row => {
+  const rows = values.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i]; });
-    // ponytail: stringify every value — a Date sneaking into google.script.run's response causes "deserialize threw error"
     Object.keys(obj).forEach(k => {
       const v = obj[k];
       if (v instanceof Date) obj[k] = v.toISOString();
@@ -61,6 +60,8 @@ function readRows_(name) {
     obj.durationMinutes = Number(obj.durationMinutes) || 0;
     return obj;
   });
+  // ponytail: belt-and-suspenders — JSON round-trip strips any non-JSON class (Date, RegExp, custom) that survives the typeof checks
+  return JSON.parse(JSON.stringify(rows));
 }
 
 function appendRow_(name, obj) {
