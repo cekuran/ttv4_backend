@@ -103,7 +103,6 @@
     <form class="panel" id="task-form">
       <input id="task-name" placeholder="Task name" required style="flex:1; min-width:240px;">
       <select id="task-label"><option value="">No label</option></select>
-      <input id="task-new-label" placeholder="…or new label name" style="min-width:160px;">
       <button type="submit">Add task</button>
     </form>
     <div id="task-table-wrap"></div>
@@ -357,7 +356,30 @@ async function onManualSubmit(e) {
 
 // ==== Tasks ====
 async function renderTasksView() {
-  populateLabelSelect($('#task-label'), 'No label');
+  const sel = $('#task-label');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">No label</option>';
+  state.labels.forEach(l => {
+    const o = document.createElement('option');
+    o.value = l.id; o.textContent = l.name;
+    sel.appendChild(o);
+  });
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__'; newOpt.textContent = '+ New label…';
+  sel.appendChild(newOpt);
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+
+  sel.onchange = async () => {
+    if (sel.value !== '__new__') return;
+    sel.value = '';
+    const name = (prompt('New label name:') || '').trim();
+    if (!name) return;
+    state.labels = await gs('createLabel', name);
+    renderTasksView();
+    const fresh = state.labels.find(l => l.name === name);
+    if (fresh) $('#task-label').value = fresh.id;
+  };
+
   if (state.tasks.length === 0) {
     $('#task-table-wrap').innerHTML = `<div class="empty">No tasks yet. Add one above.</div>`;
     return;
@@ -398,16 +420,8 @@ async function onTaskCreate(e) {
   e.preventDefault();
   const name = $('#task-name').value.trim();
   if (!name) return;
-  let labelId = $('#task-label').value;
-  const newLabelName = $('#task-new-label').value.trim();
-  if (newLabelName) {
-    state.labels = await gs('createLabel', newLabelName);
-    const fresh = state.labels.find(l => l.name === newLabelName);
-    labelId = fresh ? fresh.id : '';
-  }
-  await gs('createTask', name, labelId);
+  await gs('createTask', name, $('#task-label').value);
   $('#task-name').value = '';
-  $('#task-new-label').value = '';
   state.tasks = await gs('getTasks');
   renderTasksView();
   refreshAll();
