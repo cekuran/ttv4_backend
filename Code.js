@@ -23,7 +23,6 @@ function setSpreadsheetId(id) {
 
 function ensureSchema_() {
   const ss = ss_();
-  const txtCols = new Set(['startTime', 'endTime', 'createdAt']);
   Object.entries(SHEETS).forEach(([name, headers]) => {
     let s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name);
@@ -31,10 +30,6 @@ function ensureSchema_() {
       s.getRange(1, 1, 1, headers.length).setValues([headers]);
       s.setFrozenRows(1);
     }
-    // ponytail: keep time columns as plain text so Sheets doesn't reinterpret ISO as a Date cell on read
-    headers.forEach((h, i) => {
-      if (txtCols.has(h)) s.getRange(2, i+1, s.getMaxRows()-1, 1).setNumberFormat('@');
-    });
   });
 }
 
@@ -68,13 +63,7 @@ function readRows_(name) {
 function appendRow_(name, obj) {
   const s = ss_().getSheetByName(name);
   const headers = s.getDataRange().getValues()[0];
-  // ponytail: stringify Date values so plain-text columns keep them as ISO, not auto-converted back to Date cells
-  const row = headers.map(h => {
-    const v = obj[h];
-    if (v === undefined) return '';
-    if (v instanceof Date) return v.toISOString();
-    return v;
-  });
+  const row = headers.map(h => obj[h] !== undefined ? obj[h] : '');
   s.appendRow(row);
 }
 
