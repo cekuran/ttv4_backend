@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TaskTime</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 14px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #f6f7f9; color: #202124; }
+  header { background: #1a73e8; color: white; padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  #active-pill { margin-left: auto; background: rgba(255,255,255,0.18); padding: 6px 12px; border-radius: 20px; display: flex; align-items: center; gap: 10px; }
+  #active-pill[hidden] { display: none; }
+  #active-pill .name { font-weight: 600; }
+  #active-pill .elapsed { font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
+  #active-pill button { background: white; color: #1a73e8; border: 0; border-radius: 12px; padding: 4px 12px; cursor: pointer; font-weight: 600; }
+  nav.tabs { display: flex; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0 8px; }
+  nav.tabs button { background: none; border: 0; padding: 14px 18px; cursor: pointer; font-size: 14px; color: #5f6368; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  nav.tabs button:hover { color: #1a73e8; }
+  nav.tabs button.active { color: #1a73e8; border-bottom-color: #1a73e8; font-weight: 600; }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .panel { background: #fff; padding: 16px 20px; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); margin-bottom: 16px; }
+  .panel h3 { margin: 0 0 12px; font-size: 14px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.4px; }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 12px 16px; background: #fff; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); margin-bottom: 16px; }
+  .filters label { color: #5f6368; font-size: 13px; margin-right: 4px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font: inherit; padding: 7px 12px; border: 1px solid #dadce0; border-radius: 4px; background: white; }
+  input:focus, select:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 1px #1a73e8; }
+  button { background: #1a73e8; color: white; border: 0; cursor: pointer; font-weight: 500; }
+  button:hover { background: #1557b0; }
+  button.secondary { background: #fff; color: #1a73e8; border: 1px solid #dadce0; }
+  button.secondary:hover { background: #f1f3f4; }
+  button.del { background: #ea4335; padding: 4px 10px; font-size: 12px; }
+  button.del:hover { background: #c5221f; }
+  table.data { background: white; border-collapse: collapse; width: 100%; box-shadow: 0 1px 2px rgba(60,64,67,0.1); border-radius: 8px; overflow: hidden; }
+  table.data th, table.data td { padding: 10px 12px; border-bottom: 1px solid #f1f3f4; text-align: left; vertical-align: middle; }
+  table.data th { background: #f8f9fa; font-weight: 600; color: #5f6368; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data input { padding: 4px 8px; width: 100%; border: 1px solid transparent; }
+  table.data input:focus { border-color: #1a73e8; background: #fff; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; color: white; font-size: 12px; font-weight: 500; }
+  .dot { display: inline-block; width: 18px; height: 18px; border-radius: 50%; vertical-align: middle; }
+  .empty { text-align: center; padding: 40px; color: #80868b; }
+  canvas { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); }
+  h3.section { margin: 24px 0 12px; font-size: 13px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TaskTime</h1>
+  <div id="active-pill" hidden>
+    <span class="name" id="active-task-name"></span>
+    <span class="elapsed" id="active-elapsed">00:00:00</span>
+    <button id="stop-btn">Stop</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button data-view="timer" class="active">Timer</button>
+  <button data-view="log">Log</button>
+  <button data-view="tasks">Tasks</button>
+  <button data-view="labels">Labels</button>
+  <button data-view="stats">Stats</button>
+</nav>
+
+<main>
+  <section id="view-timer" class="view active">
+    <div class="panel">
+      <h3>Start a timer</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select id="timer-task" style="min-width:240px; flex:1;"></select>
+        <button id="start-btn">Start</button>
+      </div>
+      <p style="color:#5f6368; margin-top:12px;">Pick a task and press Start. The timer ticks live in the header; press Stop to log the elapsed time.</p>
+    </div>
+  </section>
+
+  <section id="view-log" class="view">
+    <div class="filters">
+      <label>From <input type="date" id="log-from"></label>
+      <label>To <input type="date" id="log-to"></label>
+      <label>Task <select id="log-task"></select></label>
+      <label>Label <select id="log-label"></select></label>
+      <button class="secondary" id="log-clear">Clear filters</button>
+    </div>
+
+    <div id="log-summary"></div>
+
+    <h3 class="section">Add manual entry</h3>
+    <form class="panel" id="manual-form">
+      <select id="manual-task" required style="min-width:200px;"></select>
+      <input type="datetime-local" id="manual-start" required>
+      <input type="datetime-local" id="manual-end" required>
+      <input type="text" id="manual-notes" placeholder="Notes (optional)" style="flex:1; min-width:200px;">
+      <button type="submit">Add</button>
+    </form>
+  </section>
+
+  <section id="view-tasks" class="view">
+    <form class="panel" id="task-form">
+      <input id="task-name" placeholder="Task name" required style="flex:1; min-width:240px;">
+      <select id="task-label"><option value="">No label</option></select>
+      <button type="submit">Add task</button>
+    </form>
+    <div id="task-table-wrap"></div>
+  </section>
+
+  <section id="view-labels" class="view">
+    <form class="panel" id="label-form">
+      <input id="label-name" placeholder="Label name" required style="flex:1; min-width:240px;">
+      <button type="submit">Add label</button>
+    </form>
+    <div id="label-table-wrap"></div>
+  </section>
+
+  <section id="view-stats" class="view">
+    <div class="filters">
+      <label>Range <select id="stats-range">
+        <option value="day">Today</option>
+        <option value="week">This week</option>
+        <option value="month">This month</option>
+      </select></label>
+      <label>Group by <select id="stats-group">
+        <option value="task">Task</option>
+        <option value="label">Label</option>
+      </select></label>
+    </div>
+    <div id="stats-totals"></div>
+    <div style="margin-top:16px;"><canvas id="stats-chart"></canvas></div>
+  </section>
+</main>
+
+<script>
+// ==== State ====
+const state = {
+  tasks: [], labels: [], entries: [],
+  activeTimer: null,
+  tickInterval: null, chart: null
+};
+
+// ==== Helpers ====
+const $  = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+const fmtHM = (min) => `${Math.floor(min/60)}h ${String(min%60).padStart(2,'0')}m`;
+const fmtHMS = (ms) => {
+  const s = Math.max(0, Math.floor(ms/1000));
+  return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+};
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const isoDate = (d) => new Date(d).toISOString().slice(0,10);
+
+function taskById(id)    { return state.tasks.find(t => t.id === id); }
+function taskName(id)    { const t = taskById(id); return t ? t.name : '(deleted)'; }
+function taskLabelId(id) { const t = taskById(id); return t ? (t.labelId || '') : ''; }
+function labelById(id)   { return state.labels.find(l => l.id === id); }
+function labelName(id)   { const l = labelById(id); return l ? l.name : ''; }
+function labelColor(id)  { const l = labelById(id); return l ? l.color : '#9aa0a6'; }
+
+function gs(fn, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)
+      [fn](...args);
+  });
+}
+
+function populateTaskSelect(sel, placeholder) {
+  const prev = sel.value;
+  sel.innerHTML = placeholder ? `<option value="">${placeholder}</option>` : '';
+  state.tasks.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    sel.appendChild(o);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+function populateLabelSelect(sel, placeholder) {
+  const prev = sel.value;
+  sel.innerHTML = placeholder ? `<option value="">${placeholder}</option>` : '';
+  state.labels.forEach(l => {
+    const o = document.createElement('option');
+    o.value = l.id; o.textContent = l.name;
+    sel.appendChild(o);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+const PALETTE_C = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','#FF6D00','#7B1FA2'];
+
+// ==== Bootstrap ====
+async function init() {
+  try {
+    Object.assign(state, await gs('getInitialData'));
+    bindTabs();
+    bindGlobal();
+    refreshAll();
+    if (state.activeTimer) startTicker();
+  } catch (e) {
+    document.body.innerHTML = `<pre style="color:#b00020; padding:20px; white-space:pre-wrap;">${e.message}\n\nOpen the script as a Web App URL. The script must be bound to a Google Sheet; Tasks/Labels/TimeEntries sheets are created on first load.</pre>`;
+  }
+}
+
+function bindTabs() {
+  $$('.tabs button').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+}
+function showView(name) {
+  $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
+  if (name === 'log') renderLog();
+  if (name === 'tasks') renderTasksView();
+  if (name === 'labels') renderLabelsView();
+  if (name === 'stats') renderStats();
+}
+
+function bindGlobal() {
+  $('#start-btn').addEventListener('click', onStart);
+  $('#stop-btn').addEventListener('click', onStop);
+  $('#manual-form').addEventListener('submit', onManualSubmit);
+  $('#task-form').addEventListener('submit', onTaskCreate);
+  $('#label-form').addEventListener('submit', onLabelCreate);
+  ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).addEventListener('change', renderLog));
+  $('#log-clear').addEventListener('click', () => {
+    ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).value = '');
+    renderLog();
+  });
+  ['stats-range','stats-group'].forEach(id => $('#'+id).addEventListener('change', renderStats));
+}
+
+function refreshAll() {
+  populateTaskSelect($('#timer-task'));
+  populateTaskSelect($('#manual-task'));
+  renderActivePill();
+  renderLog();
+}
+
+// ==== Active timer ====
+async function onStart() {
+  const taskId = $('#timer-task').value;
+  if (!taskId) { alert('Pick a task'); return; }
+  state.activeTimer = await gs('startTimer', taskId);
+  startTicker();
+}
+async function onStop() {
+  await gs('stopTimer');
+  state.activeTimer = null;
+  stopTicker();
+  state.entries = await gs('getEntries');
+  if ($('#view-log').classList.contains('active'))   renderLog();
+  if ($('#view-stats').classList.contains('active')) renderStats();
+}
+function startTicker() {
+  if (state.tickInterval) return;
+  tick();
+  state.tickInterval = setInterval(tick, 1000);
+  renderActivePill();
+}
+function tick() {
+  if (!state.activeTimer) return;
+  const ms = Date.now() - new Date(state.activeTimer.startTime).getTime();
+  $('#active-elapsed').textContent = fmtHMS(ms);
+}
+function stopTicker() {
+  if (state.tickInterval) clearInterval(state.tickInterval);
+  state.tickInterval = null;
+  renderActivePill();
+}
+function renderActivePill() {
+  const pill = $('#active-pill');
+  if (state.activeTimer) {
+    pill.hidden = false;
+    $('#active-task-name').textContent = taskName(state.activeTimer.taskId);
+    const ms = Date.now() - new Date(state.activeTimer.startTime).getTime();
+    $('#active-elapsed').textContent = fmtHMS(ms);
+  } else {
+    pill.hidden = true;
+  }
+}
+
+// ==== Log ====
+function renderLog() {
+  populateTaskSelect($('#log-task'), 'All tasks');
+  populateLabelSelect($('#log-label'), 'All labels');
+  // defaults: last 30 days
+  if (!$('#log-from').value) $('#log-from').value = isoDate(Date.now() - 30*86400000);
+  if (!$('#log-to').value)   $('#log-to').value   = isoDate(Date.now());
+
+  const from = $('#log-from').value;
+  const to   = $('#log-to').value;
+  const taskFilter  = $('#log-task').value;
+  const labelFilter = $('#log-label').value;
+
+  const toEnd = to ? new Date(to) : null;
+  if (toEnd) toEnd.setHours(23,59,59,999);
+
+  const filtered = state.entries
+    .filter(e => {
+      const d = new Date(e.startTime);
+      if (from && d < new Date(from)) return false;
+      if (toEnd && d > toEnd) return false;
+      if (taskFilter && e.taskId !== taskFilter) return false;
+      if (labelFilter && taskLabelId(e.taskId) !== labelFilter) return false;
+      return true;
+    })
+    .sort((a,b) => new Date(b.startTime) - new Date(a.startTime));
+
+  const total = filtered.reduce((s,e) => s + Number(e.durationMinutes || 0), 0);
+
+  if (filtered.length === 0) {
+    $('#log-summary').innerHTML = `<div class="empty">No entries match the filters.</div>`;
+    return;
+  }
+
+  let html = `<div class="panel"><b>Total: ${fmtHM(total)}</b> · ${filtered.length} entr${filtered.length===1?'y':'ies'}</div>`;
+  html += `<table class="data"><thead><tr><th>Date</th><th>Task</th><th>Label</th><th>Start</th><th>End</th><th>Duration</th><th>Source</th><th></th></tr></thead><tbody>`;
+  filtered.forEach(e => {
+    const lid = taskLabelId(e.taskId);
+    html += `<tr>
+      <td>${new Date(e.startTime).toLocaleDateString()}</td>
+      <td>${escapeHtml(taskName(e.taskId))}</td>
+      <td>${lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '<span style="color:#80868b">—</span>'}</td>
+      <td>${new Date(e.startTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+      <td>${new Date(e.endTime).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+      <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
+      <td style="color:#5f6368; font-size:12px;">${escapeHtml(e.source || '')}</td>
+      <td><button class="del" data-id="${e.id}">Delete</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  $('#log-summary').innerHTML = html;
+  $$('#log-summary .del').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this entry?')) return;
+    state.entries = await gs('deleteEntry', b.dataset.id);
+    renderLog();
+  });
+}
+
+async function onManualSubmit(e) {
+  e.preventDefault();
+  const taskId = $('#manual-task').value;
+  const start  = $('#manual-start').value;
+  const end    = $('#manual-end').value;
+  const notes  = $('#manual-notes').value;
+  if (!taskId) { alert('Pick a task'); return; }
+  try {
+    await gs('createEntry', { taskId, startTime: new Date(start).toISOString(), endTime: new Date(end).toISOString(), source: 'manual', notes });
+    e.target.reset();
+    state.entries = await gs('getEntries');
+    renderLog();
+  } catch (err) { alert(err.message); }
+}
+
+// ==== Tasks ====
+async function renderTasksView() {
+  populateLabelSelect($('#task-label'), 'No label');
+  if (state.tasks.length === 0) {
+    $('#task-table-wrap').innerHTML = `<div class="empty">No tasks yet. Add one above.</div>`;
+    return;
+  }
+  let html = `<table class="data"><thead><tr><th style="width:50%">Task</th><th>Label</th><th style="width:60px"></th></tr></thead><tbody>`;
+  state.tasks.forEach(t => {
+    const lid = t.labelId || '';
+    html += `<tr>
+      <td><input data-id="${t.id}" class="edit-name" value="${escapeHtml(t.name)}"></td>
+      <td>
+        <select data-id="${t.id}" class="edit-label">
+          <option value="">—</option>
+          ${state.labels.map(l => `<option value="${l.id}" ${l.id===lid?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
+        </select>
+      </td>
+      <td><button class="del" data-id="${t.id}">Delete</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  $('#task-table-wrap').innerHTML = html;
+
+  $$('#task-table-wrap .edit-name').forEach(inp => inp.onchange = async () => {
+    state.tasks = await gs('updateTask', inp.dataset.id, { name: inp.value });
+    renderTasksView(); refreshAll();
+  });
+  $$('#task-table-wrap .edit-label').forEach(sel => sel.onchange = async () => {
+    state.tasks = await gs('updateTask', sel.dataset.id, { labelId: sel.value });
+    renderTasksView(); renderLog();
+  });
+  $$('#task-table-wrap .del').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this task? Past time entries stay but show "(deleted)".')) return;
+    state.tasks = await gs('deleteTask', b.dataset.id);
+    renderTasksView(); renderLog(); refreshAll();
+  });
+}
+
+async function onTaskCreate(e) {
+  e.preventDefault();
+  const name = $('#task-name').value.trim();
+  if (!name) return;
+  await gs('createTask', name, $('#task-label').value);
+  $('#task-name').value = '';
+  state.tasks = await gs('getTasks');
+  renderTasksView();
+  refreshAll();
+}
+
+// ==== Labels ====
+async function renderLabelsView() {
+  if (state.labels.length === 0) {
+    $('#label-table-wrap').innerHTML = `<div class="empty">No labels yet. Add one above.</div>`;
+    return;
+  }
+  let html = `<table class="data"><thead><tr><th style="width:40px"></th><th>Name</th><th style="width:60px"></th></tr></thead><tbody>`;
+  state.labels.forEach(l => {
+    html += `<tr>
+      <td><span class="dot" style="background:${l.color}"></span></td>
+      <td><input data-id="${l.id}" class="edit-name" value="${escapeHtml(l.name)}"></td>
+      <td><button class="del" data-id="${l.id}">Delete</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  $('#label-table-wrap').innerHTML = html;
+
+  $$('#label-table-wrap .edit-name').forEach(inp => inp.onchange = async () => {
+    state.labels = await gs('updateLabel', inp.dataset.id, { name: inp.value });
+    renderLabelsView(); renderLog();
+  });
+  $$('#label-table-wrap .del').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this label? Tasks using it will become unlabeled.')) return;
+    state.labels = await gs('deleteLabel', b.dataset.id);
+    renderLabelsView();
+    state.tasks = await gs('getTasks');
+    renderLog(); renderTasksView();
+  });
+}
+
+async function onLabelCreate(e) {
+  e.preventDefault();
+  const name = $('#label-name').value.trim();
+  if (!name) return;
+  await gs('createLabel', name);
+  $('#label-name').value = '';
+  state.labels = await gs('getLabels');
+  renderLabelsView();
+}
+
+// ==== Stats ====
+function rangeBounds(range) {
+  const now = new Date();
+  if (range === 'day') {
+    return [new Date(now.setHours(0,0,0,0)), new Date()];
+  } else if (range === 'week') {
+    const start = new Date();
+    const dow = (start.getDay() + 6) % 7; // Monday=0
+    start.setDate(start.getDate() - dow);
+    start.setHours(0,0,0,0);
+    return [start, new Date()];
+  }
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end   = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return [start, end];
+}
+
+function renderStats() {
+  const range = $('#stats-range').value;
+  const groupBy = $('#stats-group').value;
+  const [start, end] = rangeBounds(range);
+
+  const inRange = state.entries.filter(e => {
+    const d = new Date(e.startTime);
+    return d >= start && d < end;
+  });
+
+  // Totals per group
+  const totals = new Map();
+  inRange.forEach(e => {
+    const key = groupBy === 'task'
+      ? taskName(e.taskId)
+      : (labelName(taskLabelId(e.taskId)) || '(no label)');
+    totals.set(key, (totals.get(key) || 0) + Number(e.durationMinutes || 0));
+  });
+
+  const totalAll = [...totals.values()].reduce((a,b) => a+b, 0);
+  let totalsHtml = `<div class="panel"><b>Total: ${fmtHM(totalAll)}</b></div>`;
+  if (totals.size === 0) {
+    totalsHtml = `<div class="empty">No time logged in this range.</div>`;
+  } else {
+    totalsHtml += `<table class="data"><thead><tr><th>${groupBy==='task'?'Task':'Label'}</th><th>Total</th></tr></thead><tbody>`;
+    [...totals.entries()].sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
+      totalsHtml += `<tr><td>${escapeHtml(k)}</td><td><b>${fmtHM(v)}</b></td></tr>`;
+    });
+    totalsHtml += '</tbody></table>';
+  }
+  $('#stats-totals').innerHTML = totalsHtml;
+
+  // Stacked bar chart: hours per day, stacked by group
+  const buckets = {};
+  inRange.forEach(e => {
+    const day = isoDate(e.startTime);
+    const key = groupBy === 'task'
+      ? taskName(e.taskId)
+      : (labelName(taskLabelId(e.taskId)) || '(no label)');
+    buckets[day] = buckets[day] || {};
+    buckets[day][key] = (buckets[day][key] || 0) + Number(e.durationMinutes || 0);
+  });
+  const days = Object.keys(buckets).sort();
+  const allKeys = new Set();
+  days.forEach(d => Object.keys(buckets[d]).forEach(k => allKeys.add(k)));
+  const allKeysArr = [...allKeys];
+
+  const datasets = allKeysArr.map((k, idx) => {
+    const color = groupBy === 'label'
+      ? (labelById(state.labels.find(l => l.name === k)?.id)?.color || PALETTE_C[idx % PALETTE_C.length])
+      : PALETTE_C[idx % PALETTE_C.length];
+    return {
+      label: k,
+      data: days.map(d => (buckets[d][k] || 0) / 60),
+      backgroundColor: color,
+      borderColor: color,
+      borderWidth: 0
+    };
+  });
+
+  if (state.chart) state.chart.destroy();
+  if (days.length === 0) {
+    state.chart = null;
+    $('#stats-chart').getContext('2d').clearRect(0, 0, $('#stats-chart').width, $('#stats-chart').height);
+    return;
+  }
+  state.chart = new Chart($('#stats-chart'), {
+    type: 'bar',
+    data: { labels: days.map(d => new Date(d).toLocaleDateString()), datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, title: { display: true, text: 'Hours' }, ticks: { beginAtZero: true } }
+      },
+      plugins: { legend: { position: 'bottom' } }
+    }
+  });
+}
+
+init();
+</script>
+</body>
+</html>
