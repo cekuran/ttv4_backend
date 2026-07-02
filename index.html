@@ -48,6 +48,8 @@
   .fold-btn { background: none; color: #5f6368; border: 0; cursor: pointer; font-size: 11px; padding: 2px 6px; width: 24px; line-height: 1; }
   .fold-btn:hover { background: #f1f3f4; color: #1a73e8; border-radius: 4px; }
   .fold-btn[disabled] { color: #dadce0; cursor: default; background: none; }
+  .grp-hdr { cursor: pointer; user-select: none; }
+  .grp-hdr > td { background: #f1f3f4; font-weight: 600; }
   .task-total { font-variant-numeric: tabular-nums; }
   .task-total.zero { color: #80868b; font-weight: normal; }
   tr.task-entries > td { background: #f8f9fa; padding: 4px 12px 12px; }
@@ -96,6 +98,7 @@
       <label>To <input type="date" id="log-to"></label>
       <label>Task <select id="log-task"></select></label>
       <label>Label <select id="log-label"></select></label>
+      <label>Group <select id="log-group"><option value="">None</option><option value="task">By task</option><option value="label">By label</option></select></label>
       <button class="secondary" id="log-clear">Clear filters</button>
     </div>
 
@@ -284,7 +287,7 @@ function bindGlobal() {
   $('#manual-form').addEventListener('submit', onManualSubmit);
   $('#task-form').addEventListener('submit', onTaskCreate);
   $('#label-form').addEventListener('submit', onLabelCreate);
-  ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).addEventListener('change', renderLog));
+  ['log-from','log-to','log-task','log-label','log-group'].forEach(id => $('#'+id).addEventListener('change', renderLog));
   $('#log-clear').addEventListener('click', () => {
     ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).value = '');
     renderLog();
@@ -389,9 +392,10 @@ function renderLog() {
 
   let html = `<div class="panel"><b>Total: ${fmtHM(total)}</b> · ${filtered.length} entr${filtered.length===1?'y':'ies'}</div>`;
   html += `<table class="data"><thead><tr><th>Date</th><th>Task</th><th>Label</th><th>Start</th><th>End</th><th>Duration</th><th>Source</th><th></th></tr></thead><tbody>`;
-  filtered.forEach(e => {
+
+  const rowCells = e => {
     const lid = taskLabelId(e.taskId);
-    html += `<tr>
+    return `
       <td>${fmtDate(e.startTime)}</td>
       <td>${escapeHtml(taskName(e.taskId))}</td>
       <td>${lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '<span style="color:#80868b">—</span>'}</td>
@@ -399,15 +403,49 @@ function renderLog() {
       <td>${fmtTime(e.endTime)}</td>
       <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
       <td style="color:#5f6368; font-size:12px;">${escapeHtml(e.source || '')}</td>
-      <td><button class="del" data-id="${e.id}">Delete</button></td>
-    </tr>`;
-  });
+      <td><button class="del" data-id="${e.id}">Delete</button></td>`;
+  };
+
+  const groupBy = $('#log-group').value;
+  if (!groupBy) {
+    filtered.forEach(e => { html += `<tr>${rowCells(e)}</tr>`; });
+  } else {
+    const groups = new Map();
+    filtered.forEach(e => {
+      const key = groupBy === 'task' ? e.taskId : (taskLabelId(e.taskId) || '');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(e);
+    });
+    // sort groups by total time desc, biggest first
+    const ordered = [...groups.entries()]
+      .map(([k, list]) => [k, list, list.reduce((s, e) => s + Number(e.durationMinutes || 0), 0)])
+      .sort((a, b) => b[2] - a[2]);
+    ordered.forEach(([key, list, grpTotal], i) => {
+      const gid = 'g' + i;
+      const grpName = groupBy === 'task'
+        ? (key ? taskName(key) : '(no task)')
+        : (key ? labelName(key) : '(no label)');
+      const dot = groupBy === 'label' && key
+        ? ` <span class="dot" style="background:${labelColor(key)}"></span>`
+        : '';
+      html += `<tr class="grp-hdr" data-gid="${gid}"><td colspan="8"><button class="fold-btn">▾</button> ${escapeHtml(grpName)}${dot} <span style="color:#5f6368; font-weight:normal">· ${fmtHM(grpTotal)} · ${list.length} entr${list.length===1?'y':'ies'}</span></td></tr>`;
+      list.forEach(e => { html += `<tr class="grp-row" data-gid="${gid}">${rowCells(e)}</tr>`; });
+    });
+  }
+
   html += '</tbody></table>';
   $('#log-summary').innerHTML = html;
   $$('#log-summary .del').forEach(b => b.onclick = async () => {
     if (!confirm('Delete this entry?')) return;
     state.entries = await gs('deleteEntry', b.dataset.id);
     renderLog();
+  });
+  $$('#log-summary .grp-hdr').forEach(hdr => hdr.onclick = () => {
+    const gid = hdr.dataset.gid;
+    const btn = hdr.querySelector('.fold-btn');
+    const collapsed = btn.textContent === '▸';
+    $$(`#log-summary .grp-row[data-gid="${gid}"]`).forEach(r => { r.hidden = !collapsed; });
+    btn.textContent = collapsed ? '▾' : '▸';
   });
 }
 
