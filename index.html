@@ -189,7 +189,6 @@ const parseLocalInput = (v) => {
   return new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], 0, 0);
 };
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const isoDate = (d) => new Date(d).toISOString().slice(0,10);
 // Local (not UTC) yyyy-mm-dd — for date-range defaults so bounds match how entries are compared/displayed
 const localDay = (d) => {
   const x = new Date(d), p = n => String(n).padStart(2,'0');
@@ -670,64 +669,42 @@ function renderStats() {
     totals.set(key, (totals.get(key) || 0) + Number(e.durationMinutes || 0));
   });
 
-  const totalAll = [...totals.values()].reduce((a,b) => a+b, 0);
-  let totalsHtml = `<div class="panel"><b>Total: ${fmtHM(totalAll)}</b></div>`;
-  if (totals.size === 0) {
-    totalsHtml = `<div class="empty">No time logged in this range.</div>`;
-  } else {
-    totalsHtml += `<table class="data"><thead><tr><th>${groupBy==='task'?'Task':'Label'}</th><th>Total</th></tr></thead><tbody>`;
-    [...totals.entries()].sort((a,b) => b[1]-a[1]).forEach(([k,v]) => {
-      totalsHtml += `<tr><td>${escapeHtml(k)}</td><td><b>${fmtHM(v)}</b></td></tr>`;
-    });
-    totalsHtml += '</tbody></table>';
-  }
-  $('#stats-totals').innerHTML = totalsHtml;
-
-  // Stacked bar chart: hours per day, stacked by group
-  const buckets = {};
-  inRange.forEach(e => {
-    const day = isoDate(e.startTime);
-    const key = groupBy === 'task'
-      ? taskName(e.taskId)
-      : (labelName(taskLabelId(e.taskId)) || '(no label)');
-    buckets[day] = buckets[day] || {};
-    buckets[day][key] = (buckets[day][key] || 0) + Number(e.durationMinutes || 0);
-  });
-  const days = Object.keys(buckets).sort();
-  const allKeys = new Set();
-  days.forEach(d => Object.keys(buckets[d]).forEach(k => allKeys.add(k)));
-  const allKeysArr = [...allKeys];
-
-  const datasets = allKeysArr.map((k, idx) => {
-    const color = groupBy === 'label'
-      ? (labelById(state.labels.find(l => l.name === k)?.id)?.color || PALETTE_C[idx % PALETTE_C.length])
-      : PALETTE_C[idx % PALETTE_C.length];
-    return {
-      label: k,
-      data: days.map(d => (buckets[d][k] || 0) / 60),
-      backgroundColor: color,
-      borderColor: color,
-      borderWidth: 0
-    };
-  });
-
   if (state.chart) state.chart.destroy();
-  if (days.length === 0) {
-    state.chart = null;
-    $('#stats-chart').getContext('2d').clearRect(0, 0, $('#stats-chart').width, $('#stats-chart').height);
+  state.chart = null;
+
+  if (totals.size === 0) {
+    $('#stats-totals').innerHTML = `<div class="empty">No time logged in this range.</div>`;
+    const ctx = $('#stats-chart').getContext('2d');
+    ctx.clearRect(0, 0, $('#stats-chart').width, $('#stats-chart').height);
     return;
   }
+
+  const sorted = [...totals.entries()].sort((a,b) => b[1]-a[1]);
+  const totalAll = sorted.reduce((s,[,v]) => s+v, 0);
+  let totalsHtml = `<div class="panel"><b>Total: ${fmtHM(totalAll)}</b></div>`;
+  totalsHtml += `<table class="data"><thead><tr><th>${groupBy==='task'?'Task':'Label'}</th><th>Total</th></tr></thead><tbody>`;
+  sorted.forEach(([k,v]) => {
+    totalsHtml += `<tr><td>${escapeHtml(k)}</td><td><b>${fmtHM(v)}</b></td></tr>`;
+  });
+  totalsHtml += '</tbody></table>';
+  $('#stats-totals').innerHTML = totalsHtml;
+
+  const labels = sorted.map(([k]) => k);
+  const data = sorted.map(([,v]) => v / 60);
+  const colors = labels.map((k, idx) => groupBy === 'label'
+    ? (labelById(state.labels.find(l => l.name === k)?.id)?.color || PALETTE_C[idx % PALETTE_C.length])
+    : PALETTE_C[idx % PALETTE_C.length]);
+
   state.chart = new Chart($('#stats-chart'), {
-    type: 'bar',
-    data: { labels: days.map(d => new Date(d).toLocaleDateString()), datasets },
+    type: 'pie',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1, borderColor: '#fff' }] },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      scales: {
-        x: { stacked: true, grid: { display: false } },
-        y: { stacked: true, title: { display: true, text: 'Hours' }, ticks: { beginAtZero: true } }
-      },
-      plugins: { legend: { position: 'bottom' } }
+      plugins: {
+        legend: { position: 'bottom' },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.raw.toFixed(1)}h` } }
+      }
     }
   });
 }
