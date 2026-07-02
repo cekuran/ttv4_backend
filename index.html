@@ -131,10 +131,11 @@
   <section id="view-stats" class="view">
     <div class="filters">
       <label>Range <select id="stats-range">
-        <option value="day">Today</option>
-        <option value="week">This week</option>
-        <option value="month">This month</option>
+        <option value="day">Day</option>
+        <option value="week">Week</option>
+        <option value="month">Month</option>
       </select></label>
+      <label>Anchor <input id="stats-anchor"></label>
       <label>Group by <select id="stats-group">
         <option value="task">Task</option>
         <option value="label">Label</option>
@@ -289,7 +290,7 @@ function bindGlobal() {
     ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).value = '');
     renderLog();
   });
-  ['stats-range','stats-group'].forEach(id => $('#'+id).addEventListener('change', renderStats));
+  ['stats-range','stats-group','stats-anchor'].forEach(id => $('#'+id).addEventListener('change', renderStats));
   $('#timer-label-filter').addEventListener('change', populateTimerTaskSelect);
 }
 
@@ -576,26 +577,84 @@ async function onLabelCreate(e) {
 }
 
 // ==== Stats ====
-function rangeBounds(range) {
-  const now = new Date();
+function rangeBounds(range, anchor) {
+  const v = anchor && anchor.value;
+
   if (range === 'day') {
-    return [new Date(now.setHours(0,0,0,0)), new Date()];
-  } else if (range === 'week') {
-    const start = new Date();
-    const dow = (start.getDay() + 6) % 7; // Monday=0
-    start.setDate(start.getDate() - dow);
-    start.setHours(0,0,0,0);
-    return [start, new Date()];
+    let start;
+    const m = v && /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+    if (m) start = new Date(+m[1], +m[2]-1, +m[3], 0, 0, 0, 0);
+    else { start = new Date(); start.setHours(0,0,0,0); }
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    return [start, end];
   }
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end   = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return [start, end];
+
+  if (range === 'week') {
+    let start;
+    const m = v && /^(\d{4})-W(\d{2})$/.exec(v);
+    if (m) {
+      const jan4 = new Date(+m[1], 0, 4);
+      const monW1 = new Date(jan4); monW1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+      start = new Date(monW1);
+      start.setDate(monW1.getDate() + (+m[2]-1) * 7);
+      start.setHours(0,0,0,0);
+    } else {
+      start = new Date();
+      const dow = (start.getDay() + 6) % 7; // ponytail: Monday=0
+      start.setDate(start.getDate() - dow);
+      start.setHours(0,0,0,0);
+    }
+    const end = new Date(start); end.setDate(end.getDate() + 7);
+    return [start, end];
+  }
+
+  // month
+  let y, mo;
+  const mm = v && /^(\d{4})-(\d{2})$/.exec(v);
+  if (mm) { y = +mm[1]; mo = +mm[2]-1; }
+  if (y == null) { const now = new Date(); y = now.getFullYear(); mo = now.getMonth(); }
+  return [new Date(y, mo, 1), new Date(y, mo+1, 1)];
+}
+
+function defaultAnchorValue(range) {
+  const now = new Date(), p = n => String(n).padStart(2,'0');
+  if (range === 'day')   return `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
+  if (range === 'month') return `${now.getFullYear()}-${p(now.getMonth()+1)}`;
+  const thu = new Date(now); thu.setDate(now.getDate() - ((now.getDay() + 6) % 7) + 3);
+  const year = thu.getFullYear();
+  const jan4 = new Date(year, 0, 4);
+  const monW1 = new Date(jan4); monW1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+  return `${year}-W${p(1 + Math.round((thu - monW1) / (7 * 86400000)))}`;
+}
+
+function setStatsAnchorType(range) {
+  const inp = $('#stats-anchor');
+  inp.type = range === 'day' ? 'date' : range === 'week' ? 'week' : 'month';
+  inp.value = defaultAnchorValue(range);
+}
+
+// ponytail: paste into DevTools console after page loads to verify range/anchor math
+function _testStats() {
+  const inp = document.createElement('input');
+  const check = (range, val, expStart) => {
+    inp.type = range === 'day' ? 'date' : range === 'week' ? 'week' : 'month';
+    inp.value = val;
+    const [s] = rangeBounds(range, inp);
+    console.assert(s.getTime() === expStart.getTime(), `${range} ${val}: expected ${expStart.toISOString()}, got ${s.toISOString()}`);
+  };
+  check('day',   '2026-07-02', new Date(2026, 6, 2, 0, 0, 0));
+  check('week',  '2026-W27',   new Date(2026, 5, 29, 0, 0, 0));
+  check('month', '2026-07',    new Date(2026, 6, 1, 0, 0, 0));
+  console.log('_testStats done');
 }
 
 function renderStats() {
   const range = $('#stats-range').value;
   const groupBy = $('#stats-group').value;
-  const [start, end] = rangeBounds(range);
+  const anchor = $('#stats-anchor');
+  const wantType = range === 'day' ? 'date' : range === 'week' ? 'week' : 'month';
+  if (anchor.type !== wantType || !anchor.value) setStatsAnchorType(range);
+  const [start, end] = rangeBounds(range, anchor);
 
   const inRange = state.entries.filter(e => {
     const d = new Date(e.startTime);
