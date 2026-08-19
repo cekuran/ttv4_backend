@@ -170,9 +170,16 @@
   .task-card .task-meta select { padding: 2px 8px; font-size: 12px; border-radius: var(--r-sm); }
   .task-card .task-total { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 600; color: var(--on-surface-variant); font-variant-numeric: tabular-nums; min-width: 70px; text-align: right; }
   .task-card .task-total.zero { color: var(--outline); font-weight: normal; }
-  .task-card .play-btn { width: 38px; height: 38px; border-radius: 50%; background: var(--surface-low); color: var(--primary); border: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+  .task-card .play-btn { position: relative; width: 38px; height: 38px; border-radius: 50%; background: var(--surface-low); color: var(--primary); border: 0; cursor: pointer; transition: background-color .25s, color .25s; }
+  .task-card .play-btn::before, .task-card .play-btn::after { content: ''; position: absolute; top: 50%; left: 50%; width: 13px; height: 13px; background: currentColor; transition: opacity .22s ease, transform .28s cubic-bezier(.4,0,.2,1); }
+  .task-card .play-btn::before { /* play triangle */ clip-path: polygon(15% 12%, 88% 50%, 15% 88%); transform: translate(-50%,-50%); }
+  .task-card .play-btn::after  { /* stop square  */ clip-path: polygon(18% 18%, 82% 18%, 82% 82%, 18% 82%); opacity: 0; transform: translate(-50%,-50%) rotate(-90deg) scale(.4); }
   .task-card .play-btn:hover { background: var(--primary); color: var(--on-primary); }
   .task-card .play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .task-card .play-btn.stop { background: var(--secondary); color: var(--on-secondary); }
+  .task-card .play-btn.stop:hover { background: #005a40; }
+  .task-card .play-btn.stop::before { opacity: 0; transform: translate(-50%,-50%) scale(.4); }
+  .task-card .play-btn.stop::after  { opacity: 1; transform: translate(-50%,-50%) rotate(0) scale(1); }
   .task-card .del-btn { background: transparent; color: var(--outline); border: 0; padding: 6px 10px; cursor: pointer; font-size: 12px; border-radius: var(--r-sm); font-weight: 500; }
   .task-card .del-btn:hover { background: rgba(186,26,26,0.08); color: var(--error); }
   .task-card.collapsed .task-entries { display: none; }
@@ -838,7 +845,7 @@ async function renderTasksView() {
         <div class="task-entries" id="task-entries-${t.id}" style="display:none; margin-top:10px;"></div>
       </div>
       <div class="task-total${total ? '' : ' zero'}" data-tid="${t.id}">${fmtHM(total)}<span class="task-live" style="display:none; margin-left:6px; color:var(--secondary); font-weight:600;"></span></div>
-      <button class="play-btn" data-id="${t.id}" title="Start timer" ${state.tasks.find(x=>x.id===t.id) ? '' : 'disabled'}>▶</button>
+      <button class="play-btn${state.activeTimer && state.activeTimer.taskId === t.id ? ' stop' : ''}" data-id="${t.id}" title="${state.activeTimer && state.activeTimer.taskId === t.id ? 'Stop timer' : 'Start timer'}" ${state.tasks.find(x=>x.id===t.id) ? '' : 'disabled'} aria-label="${state.activeTimer && state.activeTimer.taskId === t.id ? 'Stop timer' : 'Start timer'}"></button>
       <button class="del-btn" data-id="${t.id}">Delete</button>
     </div>`;
   });
@@ -862,6 +869,7 @@ async function renderTasksView() {
 
   // event handlers
   $$('#task-table-wrap .play-btn').forEach(b => b.onclick = async () => {
+    if (b.classList.contains('stop')) { await onStop(); return; }
     state.activeTimer = await gs('startTimer', b.dataset.id);
     startTicker();
     showView('dashboard');
