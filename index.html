@@ -36,23 +36,7 @@
 
   * { box-sizing: border-box; }
   body { font: 14px/1.5 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: var(--surface); color: var(--on-surface); }
-  header { background: var(--primary); color: var(--on-primary); padding: 14px 20px; display: flex; align-items: center; gap: 16px; box-shadow: var(--shadow-1); }
-  header h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
-
-  /* === Active timer pill — Chronos "Mini-Player" === */
-  #active-pill { margin-left: auto; background: var(--surface-container); padding: 6px 6px 6px 14px; border-radius: var(--r-xl); display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-2); }
-  #active-pill[hidden] { display: none; }
-  #active-pill .name { font-weight: 600; color: var(--on-surface); }
-  #active-pill .elapsed { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 600; color: var(--secondary); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
-  #active-pill .dot-live { width: 8px; height: 8px; border-radius: 50%; background: var(--secondary); box-shadow: 0 0 0 4px rgba(0,108,77,0.18); animation: pulse 1.6s ease-in-out infinite; }
-  #active-pill button { background: var(--secondary); color: var(--on-secondary); border: 0; border-radius: var(--r-md); padding: 6px 14px; cursor: pointer; font-weight: 600; }
-  #active-pill button:hover { background: #005a40; }
   @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.5; transform:scale(1.15);} }
-
-  nav.tabs { display: flex; background: #fff; border-bottom: 1px solid var(--outline-variant); padding: 0 8px; gap: 4px; }
-  nav.tabs button { background: none; border: 0; padding: 14px 18px; cursor: pointer; font-size: 14px; color: var(--on-surface-variant); border-bottom: 3px solid transparent; margin-bottom: -1px; font-weight: 500; }
-  nav.tabs button:hover { color: var(--primary); }
-  nav.tabs button.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
   main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   .view { display: none; }
   .view.active { display: block; }
@@ -96,37 +80,145 @@
   /* numerics in tables — keep digits aligned */
   table.data td b, .task-total { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
-  /* === Mobile (≤720px) — bottom tab bar + stacked panels === */
-  @media (max-width: 720px) {
-    body { padding-bottom: 72px; }
-    header { flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
-    header h1 { font-size: 16px; }
-    #active-pill { margin-left: 0; width: 100%; order: 2; }
-    main { padding: 14px 14px 8px; }
-    .panel, .filters { padding: 14px; border-radius: var(--r-lg); }
-    .filters { flex-direction: column; align-items: stretch; }
-    .filters label { display: flex; justify-content: space-between; align-items: center; }
-    form { flex-direction: column; align-items: stretch; }
-    form input, form select, form button { width: 100%; }
-    table.data { display: block; overflow-x: auto; white-space: nowrap; border-radius: var(--r-md); }
-    nav.tabs {
-      position: fixed; bottom: 0; left: 0; right: 0;
+  /* === App shell — sidebar (desktop) + bottom nav (mobile) === */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 240px; flex-shrink: 0; background: #fff;
+    border-right: 1px solid var(--outline-variant);
+    padding: 24px 16px; display: flex; flex-direction: column; gap: 4px;
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 5;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 12px 24px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--outline-variant);
+  }
+  .brand-logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--primary), var(--primary-container));
+    display: flex; align-items: center; justify-content: center;
+    color: var(--on-primary); font-weight: 700; font-size: 14px;
+  }
+  .brand-name { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .brand-sub  { font-size: 11px; color: var(--outline); font-weight: 500; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: var(--r-md);
+    color: var(--on-surface-variant); text-decoration: none;
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    border: 0; background: none; width: 100%; text-align: left;
+    font-family: inherit; transition: background .15s, color .15s;
+  }
+  .nav-item:hover { background: var(--surface-low); color: var(--primary); }
+  .nav-item.active { background: rgba(16,43,138,0.08); color: var(--primary); font-weight: 600; }
+  .nav-item .icon { width: 20px; height: 20px; flex-shrink: 0; display: inline-block; mask-position: center; mask-size: contain; -webkit-mask-position: center; -webkit-mask-size: contain; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; background: currentColor; }
+  .nav-item .icon-dashboard { mask-image: radial-gradient(circle at center, #000 40%, transparent 42%); -webkit-mask-image: radial-gradient(circle at center, #000 40%, transparent 42%); }
+  .nav-item .icon-tasks    { mask-image: linear-gradient(#000,#000) 4px 4px/12px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/9px 2px no-repeat, linear-gradient(#000,#000) 4px 16px/12px 2px no-repeat; -webkit-mask-image: linear-gradient(#000,#000) 4px 4px/12px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/9px 2px no-repeat, linear-gradient(#000,#000) 4px 16px/12px 2px no-repeat; }
+  .nav-item .icon-habits   { mask-image: linear-gradient(transparent 6px,#000 6px) 0/100% 20px no-repeat; -webkit-mask-image: linear-gradient(transparent 6px,#000 6px) 0/100% 20px no-repeat; }
+  .nav-item .icon-stats    { mask-image: linear-gradient(#000,#000) 0 17px/100% 3px no-repeat, radial-gradient(circle at 50% 60%, #000 0 6px, transparent 7px) 0/100% 20px no-repeat; -webkit-mask-image: linear-gradient(#000,#000) 0 17px/100% 3px no-repeat, radial-gradient(circle at 50% 60%, #000 0 6px, transparent 7px) 0/100% 20px no-repeat; }
+  .nav-item .icon-reports  { mask-image: linear-gradient(#000,#000) 3px 3px/14px 2px no-repeat, linear-gradient(#000,#000) 3px 8px/10px 2px no-repeat, linear-gradient(#000,#000) 3px 13px/14px 2px no-repeat, linear-gradient(#000,#000) 3px 18px/6px 2px no-repeat; -webkit-mask-image: linear-gradient(#000,#000) 3px 3px/14px 2px no-repeat, linear-gradient(#000,#000) 3px 8px/10px 2px no-repeat, linear-gradient(#000,#000) 3px 13px/14px 2px no-repeat, linear-gradient(#000,#000) 3px 18px/6px 2px no-repeat; }
+
+  .bottom-nav { display: none; }
+
+  main { margin-left: 240px; flex: 1; padding: 28px 40px; max-width: 1200px; }
+  .view-header { margin-bottom: 24px; }
+  .view-header h1 { font-size: 28px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .view-header p  { color: var(--on-surface-variant); font-size: 14px; margin: 0; }
+
+  /* === Dashboard widgets === */
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  .stat-card { background: #fff; border: 1px solid var(--outline-variant); border-radius: var(--r-lg); padding: 20px; box-shadow: var(--shadow-1); }
+  .stat-card .stat-label { font-size: 11px; color: var(--on-surface-variant); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 10px; }
+  .stat-card .stat-value { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 26px; font-weight: 700; color: var(--on-surface); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat-card .stat-sub   { font-size: 12px; color: var(--outline); margin-top: 6px; }
+  .active-card { background: linear-gradient(135deg, var(--primary), var(--primary-container)); color: var(--on-primary); border: 0; padding: 22px 24px; border-radius: var(--r-lg); margin-bottom: 20px; display: flex; align-items: center; gap: 18px; box-shadow: var(--shadow-2); }
+  .active-card[hidden] { display: none; }
+  .active-card .live-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--secondary); box-shadow: 0 0 0 4px rgba(0,108,77,0.30); animation: pulse 1.6s ease-in-out infinite; flex-shrink: 0; }
+  .active-card .info { flex: 1; }
+  .active-card .info .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; font-weight: 600; }
+  .active-card .info .name  { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .active-card .info .elapsed { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; color: var(--on-primary-cnt); margin-top: 4px; font-weight: 500; }
+  .active-card .stop-btn { background: var(--on-primary); color: var(--primary); border: 0; padding: 8px 18px; border-radius: var(--r-md); font-weight: 600; cursor: pointer; }
+  .active-card .stop-btn:hover { background: var(--surface-container); }
+
+  .quickstart-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .quickstart-form select { flex: 1; min-width: 200px; }
+  .quickstart-form button { width: auto; }
+
+  .up-next { background: #fff; border: 1px solid var(--outline-variant); border-radius: var(--r-lg); padding: 18px 20px; box-shadow: var(--shadow-1); }
+  .up-next h3 { margin: 0 0 12px; font-size: 12px; color: var(--on-surface-variant); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .up-next .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--surface-low); }
+  .up-next .row:last-child { border-bottom: 0; }
+  .up-next .row .name { flex: 1; font-weight: 500; font-size: 14px; }
+  .up-next .row .time { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; color: var(--on-surface-variant); font-variant-numeric: tabular-nums; }
+  .up-next .empty-row { color: var(--outline); font-size: 13px; padding: 8px 0; }
+
+  /* === Task cards === */
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .chip-filter { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 9999px; background: #fff; border: 1px solid var(--outline-variant); color: var(--on-surface-variant); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; font-family: inherit; }
+  .chip-filter:hover { border-color: var(--primary); color: var(--primary); }
+  .chip-filter.active { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+  .chip-filter .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .task-card { background: #fff; border: 1px solid var(--outline-variant); border-radius: var(--r-lg); padding: 16px 18px; display: flex; align-items: center; gap: 14px; margin-bottom: 10px; box-shadow: var(--shadow-1); transition: box-shadow .15s, transform .15s; }
+  .task-card:hover { box-shadow: var(--shadow-2); }
+  .task-card .task-info { flex: 1; min-width: 0; }
+  .task-card .task-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .task-card .task-name input { font-size: 15px; font-weight: 600; padding: 4px 8px; width: 100%; border: 1px solid transparent; border-radius: var(--r-sm); }
+  .task-card .task-name input:hover { border-color: var(--outline-variant); }
+  .task-card .task-name input:focus { border-color: var(--primary); background: #fff; box-shadow: 0 0 0 3px rgba(16,43,138,0.10); }
+  .task-card .task-meta { font-size: 12px; color: var(--on-surface-variant); display: flex; align-items: center; gap: 8px; }
+  .task-card .task-meta select { padding: 2px 8px; font-size: 12px; border-radius: var(--r-sm); }
+  .task-card .task-total { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 600; color: var(--on-surface-variant); font-variant-numeric: tabular-nums; min-width: 70px; text-align: right; }
+  .task-card .task-total.zero { color: var(--outline); font-weight: normal; }
+  .task-card .play-btn { width: 38px; height: 38px; border-radius: 50%; background: var(--surface-low); color: var(--primary); border: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+  .task-card .play-btn:hover { background: var(--primary); color: var(--on-primary); }
+  .task-card .play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .task-card .del-btn { background: transparent; color: var(--outline); border: 0; padding: 6px 10px; cursor: pointer; font-size: 12px; border-radius: var(--r-sm); font-weight: 500; }
+  .task-card .del-btn:hover { background: rgba(186,26,26,0.08); color: var(--error); }
+  .task-card.collapsed .task-entries { display: none; }
+
+  /* === Reports === */
+  .report-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 20px; }
+  .format-toggle { display: inline-flex; background: var(--surface-low); border-radius: var(--r-md); padding: 3px; gap: 2px; }
+  .format-toggle button { background: transparent; color: var(--on-surface-variant); border: 0; padding: 6px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit; }
+  .format-toggle button.active { background: var(--primary); color: var(--on-primary); }
+  .download-btn { background: var(--secondary); color: var(--on-secondary); border: 0; padding: 10px 20px; border-radius: var(--r-md); font-weight: 600; cursor: pointer; font-family: inherit; }
+  .download-btn:hover { background: #005a40; }
+  .download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .preview-table { background: #fff; border: 1px solid var(--outline-variant); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow-1); }
+  .preview-table table { width: 100%; border-collapse: collapse; }
+  .preview-table th { background: var(--surface-low); font-weight: 600; color: var(--on-surface-variant); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--outline-variant); }
+  .preview-table td { padding: 12px 14px; border-bottom: 1px solid var(--surface-low); font-size: 13px; }
+  .preview-table tr:last-child td { border-bottom: 0; }
+  .preview-table td b { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* === Mobile (≤900px) — collapse sidebar, show bottom nav === */
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    main { margin-left: 0; padding: 16px 16px 90px; }
+    .stat-grid { grid-template-columns: 1fr; }
+    .view-header h1 { font-size: 22px; }
+    .active-card { flex-wrap: wrap; padding: 16px; }
+    .bottom-nav {
+      display: flex; position: fixed; bottom: 0; left: 0; right: 0;
       background: #fff; border-top: 1px solid var(--outline-variant);
-      border-bottom: 0; padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+      padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
       justify-content: space-around; gap: 0; z-index: 10;
       box-shadow: 0 -4px 12px rgba(16,43,138,0.08);
     }
-    nav.tabs button { flex: 1; padding: 8px 4px; font-size: 11px; border-bottom: 0; border-radius: var(--r-md); display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
-    nav.tabs button::before { content: ''; display: block; width: 22px; height: 22px; border-radius: 6px; background: var(--outline-variant); transition: background .15s; }
-    nav.tabs button.active::before { background: var(--primary); }
-    nav.tabs button.active { color: var(--primary); font-weight: 600; }
-    nav.tabs button[data-view="timer"]::before  { mask: radial-gradient(circle at center, #000 36%, transparent 38%) center/contain no-repeat; -webkit-mask: radial-gradient(circle at center, #000 36%, transparent 38%) center/contain no-repeat; background: currentColor; }
-    nav.tabs button[data-view="log"]::before    { mask: linear-gradient(#000,#000) 6px 8px/10px 2px/2px 8px no-repeat; -webkit-mask: linear-gradient(#000,#000) 6px 8px/10px 2px/2px 8px no-repeat; background: currentColor; }
-    nav.tabs button[data-view="tasks"]::before  { mask: linear-gradient(#000,#000) 4px 5px/14px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/10px 2px no-repeat, linear-gradient(#000,#000) 4px 15px/14px 2px no-repeat; -webkit-mask: linear-gradient(#000,#000) 4px 5px/14px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/10px 2px no-repeat, linear-gradient(#000,#000) 4px 15px/14px 2px no-repeat; background: currentColor; }
-    nav.tabs button[data-view="labels"]::before { mask: linear-gradient(transparent 8px,#000 8px) 0/100% 22px no-repeat; -webkit-mask: linear-gradient(transparent 8px,#000 8px) 0/100% 22px no-repeat; background: currentColor; }
-    nav.tabs button[data-view="stats"]::before  { mask: radial-gradient(circle at 50% 65%, #000 0 7px, transparent 8px) 0/100% 22px no-repeat; -webkit-mask: radial-gradient(circle at 50% 65%, #000 0 7px, transparent 8px) 0/100% 22px no-repeat; background: currentColor; }
-    nav.tabs button::before { color: var(--outline-variant); }
-    nav.tabs button.active::before { color: var(--primary); }
+    .bottom-nav .nav-item { flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; font-size: 10px; border-radius: var(--r-md); }
+    .bottom-nav .nav-item .icon { width: 22px; height: 22px; }
+    .filters { flex-direction: column; align-items: stretch; }
+    .filters label { display: flex; justify-content: space-between; align-items: center; }
+    .quickstart-form { flex-direction: column; align-items: stretch; }
+    .quickstart-form select, .quickstart-form button { width: 100%; }
+    form#task-form, form#manual-form { flex-direction: column; align-items: stretch; }
+    form#task-form input, form#task-form select, form#task-form button,
+    form#manual-form input, form#manual-form select, form#manual-form button { width: 100%; }
+    table.data, .preview-table { display: block; overflow-x: auto; white-space: nowrap; border-radius: var(--r-md); }
+    .task-card { flex-wrap: wrap; }
+    .task-card .task-total { width: 100%; text-align: left; order: 99; }
+    .report-filters { flex-direction: column; align-items: stretch; }
     /* ponytail: native view-transitions slide — degrades silently if API unsupported */
     ::view-transition-old(main), ::view-transition-new(main) { animation-duration: 180ms; animation-timing-function: ease-out; }
     ::view-transition-old(main) { animation-name: slide-out-left; }
@@ -138,93 +230,177 @@
 </head>
 <body>
 
-<header>
-  <h1>TaskTime</h1>
-  <div id="active-pill" hidden>
-    <span class="dot-live"></span>
-    <span class="name" id="active-task-name"></span>
-    <span class="elapsed" id="active-elapsed">00:00:00</span>
-    <button id="stop-btn">Stop</button>
-  </div>
-</header>
-
-<nav class="tabs">
-  <button data-view="timer" class="active">Timer</button>
-  <button data-view="log">Log</button>
-  <button data-view="tasks">Tasks</button>
-  <button data-view="labels">Labels</button>
-  <button data-view="stats">Stats</button>
-</nav>
-
-<main>
-  <section id="view-timer" class="view active">
-    <div class="panel">
-      <h3>Start a timer</h3>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <select id="timer-label-filter" style="min-width:160px;"></select>
-        <select id="timer-task" style="min-width:240px; flex:1;"></select>
-        <button id="start-btn">Start</button>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">T</div>
+      <div>
+        <div class="brand-name">TaskTime</div>
+        <div class="brand-sub">Focus & time tracking</div>
       </div>
-      <p style="color:#5f6368; margin-top:12px;">Pick a task and press Start. The timer ticks live in the header; press Stop to log the elapsed time.</p>
     </div>
-  </section>
+    <button class="nav-item active" data-view="dashboard"><span class="icon icon-dashboard"></span>Dashboard</button>
+    <button class="nav-item" data-view="tasks"><span class="icon icon-tasks"></span>Tasks</button>
+    <button class="nav-item" data-view="habits"><span class="icon icon-habits"></span>Habits</button>
+    <button class="nav-item" data-view="stats"><span class="icon icon-stats"></span>Stats</button>
+    <button class="nav-item" data-view="reports"><span class="icon icon-reports"></span>Reports</button>
+  </aside>
 
-  <section id="view-log" class="view">
-    <div class="filters">
-      <label>From <input type="date" id="log-from"></label>
-      <label>To <input type="date" id="log-to"></label>
-      <label>Task <select id="log-task"></select></label>
-      <label>Label <select id="log-label"></select></label>
-      <label>Group <select id="log-group"><option value="">None</option><option value="task">By task</option><option value="label">By label</option></select></label>
-      <button class="secondary" id="log-clear">Clear filters</button>
-    </div>
+  <main>
+    <!-- ====== Dashboard ====== -->
+    <section id="view-dashboard" class="view active">
+      <div class="view-header">
+        <h1>Dashboard</h1>
+        <p>Your focus summary for today.</p>
+      </div>
 
-    <div id="log-summary"></div>
+      <div class="active-card" id="active-card" hidden>
+        <div class="live-dot"></div>
+        <div class="info">
+          <div class="label">Active session</div>
+          <div class="name" id="active-task-name">—</div>
+          <div class="elapsed" id="active-elapsed">00:00:00</div>
+        </div>
+        <button class="stop-btn" id="stop-btn">Stop</button>
+      </div>
 
-    <h3 class="section">Add manual entry</h3>
-    <form class="panel" id="manual-form">
-      <select id="manual-task" required style="min-width:200px;"></select>
-      <input type="datetime-local" id="manual-start" required>
-      <input type="datetime-local" id="manual-end" required>
-      <input type="text" id="manual-notes" placeholder="Notes (optional)" style="flex:1; min-width:200px;">
-      <button type="submit">Add</button>
-    </form>
-  </section>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Time today</div>
+          <div class="stat-value" id="stat-time-today">0h 00m</div>
+          <div class="stat-sub" id="stat-time-today-sub">Across all tasks</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tasks today</div>
+          <div class="stat-value" id="stat-tasks-today">0</div>
+          <div class="stat-sub">Unique tasks</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Entries today</div>
+          <div class="stat-value" id="stat-entries-today">0</div>
+          <div class="stat-sub">Sessions logged</div>
+        </div>
+      </div>
 
-  <section id="view-tasks" class="view">
-    <form class="panel" id="task-form">
-      <input id="task-name" placeholder="Task name" required style="flex:1; min-width:240px;">
-      <select id="task-label"><option value="">No label</option></select>
-      <button type="submit">Add task</button>
-    </form>
-    <div id="task-table-wrap"></div>
-  </section>
+      <div class="panel">
+        <h3>Start a session</h3>
+        <div class="quickstart-form">
+          <select id="timer-label-filter" style="min-width:160px;"></select>
+          <select id="timer-task" style="min-width:240px; flex:1;"></select>
+          <button id="start-btn">Start</button>
+        </div>
+      </div>
 
-  <section id="view-labels" class="view">
-    <form class="panel" id="label-form">
-      <input id="label-name" placeholder="Label name" required style="flex:1; min-width:240px;">
-      <button type="submit">Add label</button>
-    </form>
-    <div id="label-table-wrap"></div>
-  </section>
+      <div class="up-next" id="up-next">
+        <h3>Up next · top tasks this week</h3>
+        <div id="up-next-list"></div>
+      </div>
+    </section>
 
-  <section id="view-stats" class="view">
-    <div class="filters">
-      <label>Range <select id="stats-range">
-        <option value="day">Day</option>
-        <option value="week">Week</option>
-        <option value="month">Month</option>
-      </select></label>
-      <label>Anchor <input id="stats-anchor"></label>
-      <label>Group by <select id="stats-group">
-        <option value="task">Task</option>
-        <option value="label">Label</option>
-      </select></label>
-    </div>
-    <div id="stats-totals"></div>
-    <div style="margin-top:16px;"><canvas id="stats-chart"></canvas></div>
-  </section>
-</main>
+    <!-- ====== Tasks ====== -->
+    <section id="view-tasks" class="view">
+      <div class="view-header">
+        <h1>Tasks</h1>
+        <p>Manage tasks and labels.</p>
+      </div>
+
+      <form class="panel" id="task-form">
+        <input id="task-name" placeholder="Task name" required style="flex:1; min-width:240px;">
+        <select id="task-label"><option value="">No label</option></select>
+        <button type="submit">Add task</button>
+      </form>
+
+      <div class="chip-row" id="task-filter-chips"></div>
+      <div id="task-table-wrap"></div>
+    </section>
+
+    <!-- ====== Habits (was Log) ====== -->
+    <section id="view-habits" class="view">
+      <div class="view-header">
+        <h1>Habits</h1>
+        <p>Your time log, by day, task, or label.</p>
+      </div>
+
+      <div class="filters">
+        <label>From <input type="date" id="log-from"></label>
+        <label>To <input type="date" id="log-to"></label>
+        <label>Task <select id="log-task"></select></label>
+        <label>Label <select id="log-label"></select></label>
+        <label>Group <select id="log-group"><option value="">None</option><option value="task">By task</option><option value="label">By label</option></select></label>
+        <button class="secondary" id="log-clear">Clear filters</button>
+      </div>
+
+      <div id="log-summary"></div>
+
+      <h3 class="section">Add manual entry</h3>
+      <form class="panel" id="manual-form">
+        <select id="manual-task" required style="min-width:200px;"></select>
+        <input type="datetime-local" id="manual-start" required>
+        <input type="datetime-local" id="manual-end" required>
+        <input type="text" id="manual-notes" placeholder="Notes (optional)" style="flex:1; min-width:200px;">
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <!-- ====== Stats ====== -->
+    <section id="view-stats" class="view">
+      <div class="view-header">
+        <h1>Stats</h1>
+        <p>Insights into your time allocation.</p>
+      </div>
+
+      <div class="filters">
+        <label>Range <select id="stats-range">
+          <option value="day">Day</option>
+          <option value="week">Week</option>
+          <option value="month">Month</option>
+        </select></label>
+        <label>Anchor <input id="stats-anchor"></label>
+        <label>Group by <select id="stats-group">
+          <option value="task">Task</option>
+          <option value="label">Label</option>
+        </select></label>
+      </div>
+
+      <div class="stat-grid" id="stats-cards" style="grid-template-columns: repeat(4, 1fr);"></div>
+      <div id="stats-totals"></div>
+      <div style="margin-top:20px;"><canvas id="stats-chart"></canvas></div>
+    </section>
+
+    <!-- ====== Reports (NEW) ====== -->
+    <section id="view-reports" class="view">
+      <div class="view-header">
+        <h1>Reports</h1>
+        <p>Export your data as CSV or JSON.</p>
+      </div>
+
+      <div class="report-filters panel">
+        <label>From <input type="date" id="report-from"></label>
+        <label>To <input type="date" id="report-to"></label>
+        <div class="format-toggle">
+          <button class="active" data-format="csv">CSV</button>
+          <button data-format="json">JSON</button>
+        </div>
+        <button class="download-btn" id="report-download" disabled>Download</button>
+      </div>
+
+      <div class="panel" style="padding: 16px 20px;">
+        <h3>Labels</h3>
+        <div class="chip-row" id="report-label-chips" style="margin-bottom: 0;"></div>
+      </div>
+
+      <div id="report-preview" style="margin-top: 20px;"></div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-view="dashboard"><span class="icon icon-dashboard"></span>Dashboard</button>
+    <button class="nav-item" data-view="tasks"><span class="icon icon-tasks"></span>Tasks</button>
+    <button class="nav-item" data-view="habits"><span class="icon icon-habits"></span>Habits</button>
+    <button class="nav-item" data-view="stats"><span class="icon icon-stats"></span>Stats</button>
+    <button class="nav-item" data-view="reports"><span class="icon icon-reports"></span>Reports</button>
+  </nav>
+</div>
 
 <script>
 // ==== State ====
@@ -337,7 +513,7 @@ const PALETTE_C = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','
 async function init() {
   try {
     Object.assign(state, await gs('getInitialData'));
-    bindTabs();
+    bindNav();
     bindGlobal();
     refreshAll();
     if (state.activeTimer) startTicker();
@@ -346,29 +522,31 @@ async function init() {
   }
 }
 
-function bindTabs() {
-  $$('.tabs button').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
-  // ponytail: native touch swipe between tabs — no lib, 50px threshold, vertical scroll wins
+const VIEWS = ['dashboard','tasks','habits','stats','reports'];
+
+function bindNav() {
+  $$('.nav-item').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+  // ponytail: native touch swipe between views — no lib, 50px threshold, vertical scroll wins
   let tx = null;
   document.addEventListener('touchstart', e => { if (e.touches.length === 1) tx = e.touches[0].clientX; }, { passive: true });
   document.addEventListener('touchend',   e => {
     if (tx == null) return;
     const dx = e.changedTouches[0].clientX - tx; tx = null;
     if (Math.abs(dx) < 50) return;
-    const order = ['timer','log','tasks','labels','stats'];
-    const cur = order.indexOf($('.tabs button.active')?.dataset.view);
-    const next = dx < 0 ? Math.min(cur+1, order.length-1) : Math.max(cur-1, 0);
-    if (next >= 0 && next !== cur) showView(order[next]);
+    const cur = VIEWS.indexOf($('.nav-item.active')?.dataset.view);
+    const next = dx < 0 ? Math.min(cur+1, VIEWS.length-1) : Math.max(cur-1, 0);
+    if (next >= 0 && next !== cur) showView(VIEWS[next]);
   }, { passive: true });
 }
 function showView(name) {
   const swap = () => {
-    $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
     $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
-    if (name === 'log') renderLog();
-    if (name === 'tasks') renderTasksView();
-    if (name === 'labels') renderLabelsView();
-    if (name === 'stats') renderStats();
+    if (name === 'dashboard') renderDashboard();
+    if (name === 'habits')    renderHabits();
+    if (name === 'tasks')     renderTasksView();
+    if (name === 'stats')     renderStats();
+    if (name === 'reports')   renderReports();
   };
   // ponytail: native view-transitions API — fall through silently on unsupported browsers
   if (document.startViewTransition) document.startViewTransition(swap); else swap();
@@ -379,22 +557,29 @@ function bindGlobal() {
   $('#stop-btn').addEventListener('click', onStop);
   $('#manual-form').addEventListener('submit', onManualSubmit);
   $('#task-form').addEventListener('submit', onTaskCreate);
-  $('#label-form').addEventListener('submit', onLabelCreate);
-  ['log-from','log-to','log-task','log-label','log-group'].forEach(id => $('#'+id).addEventListener('change', renderLog));
+  ['log-from','log-to','log-task','log-label','log-group'].forEach(id => $('#'+id).addEventListener('change', renderHabits));
   $('#log-clear').addEventListener('click', () => {
     ['log-from','log-to','log-task','log-label'].forEach(id => $('#'+id).value = '');
-    renderLog();
+    renderHabits();
   });
   ['stats-range','stats-group','stats-anchor'].forEach(id => $('#'+id).addEventListener('change', renderStats));
   $('#timer-label-filter').addEventListener('change', populateTimerTaskSelect);
+  // Reports
+  ['report-from','report-to'].forEach(id => $('#'+id).addEventListener('change', renderReports));
+  $$('.format-toggle button').forEach(b => b.addEventListener('click', () => {
+    $$('.format-toggle button').forEach(x => x.classList.toggle('active', x === b));
+    renderReports();
+  }));
+  $('#report-download').addEventListener('click', downloadExport);
 }
 
 function refreshAll() {
   populateLabelSelect($('#timer-label-filter'), 'All labels');
   populateTimerTaskSelect();
   populateTaskSelect($('#manual-task'));
-  renderActivePill();
-  renderLog();
+  renderActiveCard();
+  renderHabits();
+  renderDashboard();
 }
 
 // ==== Active timer ====
@@ -409,14 +594,15 @@ async function onStop() {
   state.activeTimer = null;
   stopTicker();
   state.entries = await gs('getEntries');
-  if ($('#view-log').classList.contains('active'))   renderLog();
-  if ($('#view-stats').classList.contains('active')) renderStats();
+  if ($('#view-dashboard').classList.contains('active')) renderDashboard();
+  if ($('#view-habits').classList.contains('active'))    renderHabits();
+  if ($('#view-stats').classList.contains('active'))     renderStats();
 }
 function startTicker() {
   if (state.tickInterval) return;
   tick();
   state.tickInterval = setInterval(tick, 1000);
-  renderActivePill();
+  renderActiveCard();
 }
 function tick() {
   if (!state.activeTimer) return;
@@ -426,22 +612,23 @@ function tick() {
 function stopTicker() {
   if (state.tickInterval) clearInterval(state.tickInterval);
   state.tickInterval = null;
-  renderActivePill();
+  renderActiveCard();
 }
-function renderActivePill() {
-  const pill = $('#active-pill');
+function renderActiveCard() {
+  const card = $('#active-card');
+  if (!card) return;
   if (state.activeTimer) {
-    pill.hidden = false;
+    card.hidden = false;
     $('#active-task-name').textContent = taskName(state.activeTimer.taskId);
     const ms = Date.now() - new Date(state.activeTimer.startTime).getTime();
     $('#active-elapsed').textContent = fmtHMS(ms);
   } else {
-    pill.hidden = true;
+    card.hidden = true;
   }
 }
 
-// ==== Log ====
-function renderLog() {
+// ==== Habits (was Log) ====
+function renderHabits() {
   populateTaskSelect($('#log-task'), 'All tasks');
   populateLabelSelect($('#log-label'), 'All labels');
   // defaults: last 30 days (local dates so they line up with entry timestamps)
@@ -531,7 +718,7 @@ function renderLog() {
   $$('#log-summary .del').forEach(b => b.onclick = async () => {
     if (!confirm('Delete this entry?')) return;
     state.entries = await gs('deleteEntry', b.dataset.id);
-    renderLog();
+    renderHabits();
   });
   $$('#log-summary .grp-hdr').forEach(hdr => hdr.onclick = () => {
     const gid = hdr.dataset.gid;
@@ -553,25 +740,16 @@ async function onManualSubmit(e) {
     await gs('createEntry', { taskId, startTime: parseLocalInput(start).toISOString(), endTime: parseLocalInput(end).toISOString(), source: 'manual', notes });
     e.target.reset();
     state.entries = await gs('getEntries');
-    renderLog();
+    renderHabits();
   } catch (err) { alert(err.message); }
 }
 
 // ==== Tasks ====
-async function renderTasksView() {
-  const sel = $('#task-label');
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">No label</option>';
-  state.labels.forEach(l => {
-    const o = document.createElement('option');
-    o.value = l.id; o.textContent = l.name;
-    sel.appendChild(o);
-  });
-  const newOpt = document.createElement('option');
-  newOpt.value = '__new__'; newOpt.textContent = '+ New label…';
-  sel.appendChild(newOpt);
-  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+let taskFilter = '';
 
+async function renderTasksView() {
+  await ensureTaskLabelSelect();
+  const sel = $('#task-label');
   sel.onchange = async () => {
     if (sel.value !== '__new__') return;
     sel.value = '';
@@ -583,8 +761,23 @@ async function renderTasksView() {
     if (fresh) $('#task-label').value = fresh.id;
   };
 
+  // Filter chips
+  const chips = $('#task-filter-chips');
+  chips.innerHTML = `<button class="chip-filter ${taskFilter===''?'active':''}" data-lid="">All</button>` +
+    state.labels.map(l => `<button class="chip-filter ${taskFilter===l.id?'active':''}" data-lid="${l.id}"><span class="dot" style="background:${l.color}"></span>${escapeHtml(l.name)}</button>`).join('');
+  $$('#task-filter-chips .chip-filter').forEach(b => b.onclick = () => {
+    taskFilter = b.dataset.lid;
+    renderTasksView();
+  });
+
+  const visible = taskFilter ? state.tasks.filter(t => t.labelId === taskFilter) : state.tasks;
+
   if (state.tasks.length === 0) {
     $('#task-table-wrap').innerHTML = `<div class="empty">No tasks yet. Add one above.</div>`;
+    return;
+  }
+  if (visible.length === 0) {
+    $('#task-table-wrap').innerHTML = `<div class="empty">No tasks match this filter.</div>`;
     return;
   }
 
@@ -593,64 +786,77 @@ async function renderTasksView() {
   state.entries.forEach(e => { (byTask[e.taskId] = byTask[e.taskId] || []).push(e); });
   Object.values(byTask).forEach(list => list.sort((a,b) => new Date(b.startTime) - new Date(a.startTime)));
 
-  let html = `<table class="data"><thead><tr><th style="width:32px"></th><th style="width:45%">Task</th><th>Label</th><th style="width:110px">Total logged</th><th style="width:60px"></th></tr></thead><tbody>`;
-  state.tasks.forEach(t => {
+  let html = '';
+  visible.forEach(t => {
     const lid = t.labelId || '';
     const entries = byTask[t.id] || [];
     const total = entries.reduce((s,e) => s + Number(e.durationMinutes || 0), 0);
-    html += `<tr>
-      <td><button class="fold-btn" data-id="${t.id}" ${entries.length ? '' : 'disabled'}>▸</button></td>
-      <td><input data-id="${t.id}" class="edit-name" value="${escapeHtml(t.name)}"></td>
-      <td>
-        <select data-id="${t.id}" class="edit-label">
-          <option value="">—</option>
-          ${state.labels.map(l => `<option value="${l.id}" ${l.id===lid?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
-        </select>
-      </td>
-      <td class="task-total${total ? '' : ' zero'}"><b>${fmtHM(total)}</b> · ${entries.length} entr${entries.length===1?'y':'ies'}</td>
-      <td><button class="del" data-id="${t.id}">Delete</button></td>
-    </tr>`;
-    const rows = entries.length
-      ? entries.map(e => `<tr>
-          <td>${fmtDate(e.startTime)}</td>
-          <td>${fmtTime(e.startTime)}</td>
-          <td>${fmtTime(e.endTime)}</td>
-          <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
-          <td style="color:#5f6368;">${escapeHtml(e.notes || '')}</td>
-        </tr>`).join('')
-      : `<tr><td colspan="5" class="none">No entries logged yet.</td></tr>`;
-    html += `<tr class="task-entries" id="task-entries-${t.id}" hidden>
-      <td colspan="5">
-        <table class="entries-sub">
-          <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th><th>Notes</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </td>
-    </tr>`;
+    const labelObj = lid ? labelById(lid) : null;
+    const labelTag = labelObj ? `<span class="chip" style="background:${labelObj.color}">${escapeHtml(labelObj.name)}</span>` : '';
+    const labelOpts = `<option value="">—</option>` + state.labels.map(l => `<option value="${l.id}" ${l.id===lid?'selected':''}>${escapeHtml(l.name)}</option>`).join('');
+    html += `<div class="task-card" data-tid="${t.id}">
+      <div class="task-info">
+        <div class="task-name"><input data-id="${t.id}" class="edit-name" value="${escapeHtml(t.name)}"></div>
+        <div class="task-meta">
+          ${labelTag}
+          <select data-id="${t.id}" class="edit-label" title="Change label">${labelOpts}</select>
+          <span>· ${entries.length} entr${entries.length===1?'y':'ies'}</span>
+        </div>
+        <div class="task-entries" id="task-entries-${t.id}" style="display:none; margin-top:10px;"></div>
+      </div>
+      <div class="task-total${total ? '' : ' zero'}">${fmtHM(total)}</div>
+      <button class="play-btn" data-id="${t.id}" title="Start timer" ${state.tasks.find(x=>x.id===t.id) ? '' : 'disabled'}>▶</button>
+      <button class="del-btn" data-id="${t.id}">Delete</button>
+    </div>`;
   });
-  html += '</tbody></table>';
   $('#task-table-wrap').innerHTML = html;
 
-  $$('#task-table-wrap .fold-btn').forEach(b => b.onclick = () => {
-    if (b.disabled) return;
-    const row = $(`#task-entries-${b.dataset.id}`);
-    if (!row) return;
-    row.hidden = !row.hidden;
-    b.textContent = row.hidden ? '▸' : '▾';
+  // populate entry sub-views lazily
+  visible.forEach(t => {
+    const entries = byTask[t.id] || [];
+    const wrap = $(`#task-entries-${t.id}`);
+    if (!wrap) return;
+    if (!entries.length) { wrap.innerHTML = `<div style="color:var(--outline); font-size:13px; padding:6px 0;">No entries logged yet.</div>`; return; }
+    wrap.innerHTML = `<table class="entries-sub"><thead><tr><th>Date</th><th>Start</th><th>End</th><th>Duration</th><th>Notes</th></tr></thead><tbody>` +
+      entries.map(e => `<tr>
+        <td>${fmtDate(e.startTime)}</td>
+        <td>${fmtTime(e.startTime)}</td>
+        <td>${fmtTime(e.endTime)}</td>
+        <td><b>${fmtHM(Number(e.durationMinutes))}</b></td>
+        <td style="color:var(--on-surface-variant);">${escapeHtml(e.notes || '')}</td>
+      </tr>`).join('') + `</tbody></table>`;
   });
 
+  // event handlers
+  $$('#task-table-wrap .play-btn').forEach(b => b.onclick = async () => {
+    state.activeTimer = await gs('startTimer', b.dataset.id);
+    startTicker();
+    showView('dashboard');
+  });
+  $$('#task-table-wrap .del-btn').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this task? Past time entries stay but show "(deleted)".')) return;
+    state.tasks = await gs('deleteTask', b.dataset.id);
+    renderTasksView(); renderHabits(); refreshAll();
+  });
   $$('#task-table-wrap .edit-name').forEach(inp => inp.onchange = async () => {
     state.tasks = await gs('updateTask', inp.dataset.id, { name: inp.value });
     renderTasksView(); refreshAll();
   });
   $$('#task-table-wrap .edit-label').forEach(sel => sel.onchange = async () => {
     state.tasks = await gs('updateTask', sel.dataset.id, { labelId: sel.value });
-    renderTasksView(); renderLog();
+    renderTasksView(); renderHabits();
   });
-  $$('#task-table-wrap .del').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this task? Past time entries stay but show "(deleted)".')) return;
-    state.tasks = await gs('deleteTask', b.dataset.id);
-    renderTasksView(); renderLog(); refreshAll();
+  // click card body to toggle entries
+  $$('#task-table-wrap .task-card').forEach(card => {
+    const tid = card.dataset.tid;
+    const row = $(`#task-entries-${tid}`);
+    const inp = card.querySelector('.edit-name');
+    const sel = card.querySelector('.edit-label');
+    if (row) card.querySelector('.task-info').addEventListener('click', e => {
+      if (e.target === inp || e.target === sel) return;
+      const shown = row.style.display !== 'none';
+      row.style.display = shown ? 'none' : 'block';
+    });
   });
 }
 
@@ -665,45 +871,21 @@ async function onTaskCreate(e) {
   refreshAll();
 }
 
-// ==== Labels ====
-async function renderLabelsView() {
-  if (state.labels.length === 0) {
-    $('#label-table-wrap').innerHTML = `<div class="empty">No labels yet. Add one above.</div>`;
-    return;
-  }
-  let html = `<table class="data"><thead><tr><th style="width:40px"></th><th>Name</th><th style="width:60px"></th></tr></thead><tbody>`;
+// ==== Labels (folded into Tasks) ====
+async function ensureTaskLabelSelect() {
+  const sel = $('#task-label');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">No label</option>';
   state.labels.forEach(l => {
-    html += `<tr>
-      <td><span class="dot" style="background:${l.color}"></span></td>
-      <td><input data-id="${l.id}" class="edit-name" value="${escapeHtml(l.name)}"></td>
-      <td><button class="del" data-id="${l.id}">Delete</button></td>
-    </tr>`;
+    const o = document.createElement('option');
+    o.value = l.id; o.textContent = l.name;
+    sel.appendChild(o);
   });
-  html += '</tbody></table>';
-  $('#label-table-wrap').innerHTML = html;
-
-  $$('#label-table-wrap .edit-name').forEach(inp => inp.onchange = async () => {
-    state.labels = await gs('updateLabel', inp.dataset.id, { name: inp.value });
-    renderLabelsView(); renderLog();
-  });
-  $$('#label-table-wrap .del').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this label? Tasks using it will become unlabeled.')) return;
-    state.labels = await gs('deleteLabel', b.dataset.id);
-    renderLabelsView();
-    state.tasks = await gs('getTasks');
-    renderLog(); renderTasksView();
-  });
-}
-
-async function onLabelCreate(e) {
-  e.preventDefault();
-  const name = $('#label-name').value.trim();
-  if (!name) return;
-  await gs('createLabel', name);
-  $('#label-name').value = '';
-  state.labels = await gs('getLabels');
-  renderLabelsView();
-  refreshAll();
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__'; newOpt.textContent = '+ New label…';
+  sel.appendChild(newOpt);
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
 // ==== Stats ====
@@ -791,28 +973,39 @@ function renderStats() {
     return d >= start && d < end;
   });
 
-  // Totals per group
-  const totals = new Map();
+  // Aggregates
+  const totalMin = inRange.reduce((s,e) => s + Number(e.durationMinutes || 0), 0);
+  const sessions = inRange.length;
+  const byGroup = new Map();
   inRange.forEach(e => {
     const key = groupBy === 'task'
       ? taskName(e.taskId)
       : (labelName(taskLabelId(e.taskId)) || '(no label)');
-    totals.set(key, (totals.get(key) || 0) + Number(e.durationMinutes || 0));
+    byGroup.set(key, (byGroup.get(key) || 0) + Number(e.durationMinutes || 0));
   });
+  const top = [...byGroup.entries()].sort((a,b) => b[1]-a[1])[0];
+  const avgMin = sessions ? Math.round(totalMin / sessions) : 0;
+
+  // 4 stat cards
+  $('#stats-cards').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total time</div><div class="stat-value">${fmtHM(totalMin)}</div><div class="stat-sub">In range</div></div>
+    <div class="stat-card"><div class="stat-label">Sessions</div><div class="stat-value">${sessions}</div><div class="stat-sub">Entries logged</div></div>
+    <div class="stat-card"><div class="stat-label">Top ${groupBy}</div><div class="stat-value" style="font-size:18px;">${top ? escapeHtml(top[0]) : '—'}</div><div class="stat-sub">${top ? fmtHM(top[1]) : 'no data'}</div></div>
+    <div class="stat-card"><div class="stat-label">Average / session</div><div class="stat-value">${fmtHM(avgMin)}</div><div class="stat-sub">Per entry</div></div>
+  `;
 
   if (state.chart) state.chart.destroy();
   state.chart = null;
 
-  if (totals.size === 0) {
+  if (inRange.length === 0) {
     $('#stats-totals').innerHTML = `<div class="empty">No time logged in this range.</div>`;
     const ctx = $('#stats-chart').getContext('2d');
     ctx.clearRect(0, 0, $('#stats-chart').width, $('#stats-chart').height);
     return;
   }
 
-  const sorted = [...totals.entries()].sort((a,b) => b[1]-a[1]);
-  const totalAll = sorted.reduce((s,[,v]) => s+v, 0);
-  let totalsHtml = `<div class="panel"><b>Total: ${fmtHM(totalAll)}</b></div>`;
+  const sorted = [...byGroup.entries()].sort((a,b) => b[1]-a[1]);
+  let totalsHtml = `<div class="panel"><b>Total: ${fmtHM(totalMin)}</b> · ${sessions} session${sessions===1?'':'s'}</div>`;
   totalsHtml += `<table class="data"><thead><tr><th>${groupBy==='task'?'Task':'Label'}</th><th>Total</th></tr></thead><tbody>`;
   sorted.forEach(([k,v]) => {
     totalsHtml += `<tr><td>${escapeHtml(k)}</td><td><b>${fmtHM(v)}</b></td></tr>`;
@@ -820,24 +1013,171 @@ function renderStats() {
   totalsHtml += '</tbody></table>';
   $('#stats-totals').innerHTML = totalsHtml;
 
+  // Bar chart
   const labels = sorted.map(([k]) => k);
-  const data = sorted.map(([,v]) => v / 60);
+  const data   = sorted.map(([,v]) => v / 60);  // hours
   const colors = labels.map((k, idx) => groupBy === 'label'
     ? (labelById(state.labels.find(l => l.name === k)?.id)?.color || PALETTE_C[idx % PALETTE_C.length])
     : PALETTE_C[idx % PALETTE_C.length]);
 
   state.chart = new Chart($('#stats-chart'), {
-    type: 'pie',
-    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 1, borderColor: '#fff' }] },
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderRadius: 6, borderSkipped: false }] },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { position: 'bottom' },
+        legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.raw.toFixed(1)}h` } }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#454652' } },
+        y: { beginAtZero: true, grid: { color: 'rgba(117,118,131,0.15)' }, ticks: { color: '#454652', callback: v => `${v}h` } }
       }
     }
   });
+}
+
+// ==== Dashboard ====
+function renderDashboard() {
+  // Today stats
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayEnd   = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
+  const todayEntries = state.entries.filter(e => {
+    const d = new Date(e.startTime);
+    return d >= todayStart && d < todayEnd;
+  });
+  const todayMin     = todayEntries.reduce((s,e) => s + Number(e.durationMinutes||0), 0);
+  const todayTasks   = new Set(todayEntries.map(e => e.taskId)).size;
+  const todayCount   = todayEntries.length;
+  $('#stat-time-today').textContent     = fmtHM(todayMin);
+  $('#stat-time-today-sub').textContent = todayCount ? `Across ${todayTasks} task${todayTasks===1?'':'s'}` : 'No time logged today';
+  $('#stat-tasks-today').textContent    = todayTasks;
+  $('#stat-entries-today').textContent  = todayCount;
+
+  // Up next: top 5 tasks by total time this week
+  const now = new Date();
+  const dow = (now.getDay() + 6) % 7;
+  const wkStart = new Date(now); wkStart.setDate(now.getDate() - dow); wkStart.setHours(0,0,0,0);
+  const wkTotals = new Map();
+  state.entries.forEach(e => {
+    const d = new Date(e.startTime);
+    if (d < wkStart) return;
+    wkTotals.set(e.taskId, (wkTotals.get(e.taskId) || 0) + Number(e.durationMinutes||0));
+  });
+  const top5 = [...wkTotals.entries()].sort((a,b) => b[1]-a[1]).slice(0,5);
+  const list = $('#up-next-list');
+  if (top5.length === 0) {
+    list.innerHTML = `<div class="empty-row">No time logged this week yet.</div>`;
+  } else {
+    list.innerHTML = top5.map(([tid, min]) => {
+      const lid = taskLabelId(tid);
+      const tag = lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '';
+      return `<div class="row"><div class="name">${escapeHtml(taskName(tid))} ${tag}</div><div class="time">${fmtHM(min)}</div></div>`;
+    }).join('');
+  }
+
+  // Populate quickstart
+  populateLabelSelect($('#timer-label-filter'), 'All labels');
+  populateTimerTaskSelect();
+}
+
+// ==== Reports ====
+let reportLabelFilter = new Set();
+let reportFormat = 'csv';
+
+function renderReports() {
+  // defaults: last 30 days
+  if (!$('#report-from').value) $('#report-from').value = localDay(Date.now() - 30*86400000);
+  if (!$('#report-to').value)   $('#report-to').value   = localDay(Date.now());
+
+  // label chips
+  const wrap = $('#report-label-chips');
+  wrap.innerHTML = `<button class="chip-filter ${reportLabelFilter.size===0?'active':''}" data-lid="">All labels</button>` +
+    state.labels.map(l => `<button class="chip-filter ${reportLabelFilter.has(l.id)?'active':''}" data-lid="${l.id}"><span class="dot" style="background:${l.color}"></span>${escapeHtml(l.name)}</button>`).join('');
+  $$('#report-label-chips .chip-filter').forEach(b => b.onclick = () => {
+    const lid = b.dataset.lid;
+    if (!lid) { reportLabelFilter.clear(); }
+    else if (reportLabelFilter.has(lid)) { reportLabelFilter.delete(lid); }
+    else { reportLabelFilter.add(lid); }
+    renderReports();
+  });
+
+  // filtered rows
+  const rows = getFilteredReportRows();
+  $('#report-download').disabled = rows.length === 0;
+
+  if (rows.length === 0) {
+    $('#report-preview').innerHTML = `<div class="empty">No entries in this range.</div>`;
+    return;
+  }
+  const head = `<div class="panel" style="margin-bottom: 12px;"><b>${rows.length}</b> entr${rows.length===1?'y':'ies'} match</div>`;
+  const preview = rows.slice(0, 20);
+  const table = `<div class="preview-table"><table>
+    <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Task</th><th>Label</th><th>Duration</th></tr></thead>
+    <tbody>${preview.map(r => `<tr>
+      <td>${r.date}</td><td>${r.start}</td><td>${r.end}</td>
+      <td>${escapeHtml(r.task)}</td>
+      <td>${r.label ? `<span class="chip" style="background:${r.labelColor}">${escapeHtml(r.label)}</span>` : '—'}</td>
+      <td><b>${fmtHM(r.min)}</b></td>
+    </tr>`).join('')}</tbody></table></div>`;
+  const more = rows.length > 20 ? `<div style="text-align:center; color:var(--outline); font-size:13px; margin-top:8px;">Showing 20 of ${rows.length}. Download to see all.</div>` : '';
+  $('#report-preview').innerHTML = head + table + more;
+}
+
+function getFilteredReportRows() {
+  const from = $('#report-from').value;
+  const to   = $('#report-to').value;
+  const fromStart = from ? parseLocalInput(from + 'T00:00') : null;
+  const toEnd     = to   ? parseLocalInput(to   + 'T23:59') : null;
+  if (toEnd) toEnd.setSeconds(59, 999);
+  return state.entries
+    .filter(e => {
+      const d = new Date(e.startTime);
+      if (fromStart && d < fromStart) return false;
+      if (toEnd && d > toEnd) return false;
+      const lid = taskLabelId(e.taskId);
+      if (reportLabelFilter.size > 0 && !reportLabelFilter.has(lid || '')) return false;
+      return true;
+    })
+    .sort((a,b) => new Date(b.startTime) - new Date(a.startTime))
+    .map(e => {
+      const lid = taskLabelId(e.taskId);
+      return {
+        date:  fmtDate(e.startTime),
+        start: fmtTime(e.startTime),
+        end:   fmtTime(e.endTime),
+        task:  taskName(e.taskId),
+        label: lid ? labelName(lid) : '',
+        labelColor: lid ? labelColor(lid) : '',
+        min:   Number(e.durationMinutes || 0),
+        notes: e.notes || ''
+      };
+    });
+}
+
+function downloadExport() {
+  const rows = getFilteredReportRows();
+  if (!rows.length) return;
+  const fmt = $$('.format-toggle button').find(b => b.classList.contains('active'))?.dataset.format || 'csv';
+  const filename = `tasktime-${localDay(Date.now())}.${fmt}`;
+  let blob, text;
+  if (fmt === 'csv') {
+    const esc = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g,'""')}"` : v;
+    const cols = ['date','start','end','task','label','min','notes'];
+    text = cols.join(',') + '\n' + rows.map(r => cols.map(c => esc(r[c])).join(',')).join('\n');
+    blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  } else {
+    text = JSON.stringify(rows, null, 2);
+    blob = new Blob([text], { type: 'application/json' });
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
 }
 
 init();
