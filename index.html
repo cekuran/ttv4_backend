@@ -3,61 +3,137 @@
 <head>
 <meta charset="utf-8">
 <title>TaskTime</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
+  /* === Chronos Precision — design tokens === */
+  :root {
+    --surface:            #f8f9ff;
+    --surface-low:        #eff4ff;
+    --surface-container:  #e5eeff;
+    --surface-high:       #dce9ff;
+    --on-surface:         #0b1c30;
+    --on-surface-variant: #454652;
+    --outline:            #757683;
+    --outline-variant:    #c5c5d4;
+    --primary:            #102b8a;
+    --primary-container:  #2e44a1;
+    --on-primary:         #ffffff;
+    --on-primary-cnt:     #acbaff;
+    --secondary:          #006c4d;
+    --on-secondary:       #ffffff;
+    --tertiary:           #67171d;
+    --error:              #ba1a1a;
+    --r-sm: 4px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
+    --shadow-1: 0 1px 2px rgba(16,43,138,0.08), 0 1px 4px rgba(16,43,138,0.06);
+    --shadow-2: 0 4px 12px rgba(16,43,138,0.10), 0 2px 4px rgba(16,43,138,0.06);
+  }
+
   * { box-sizing: border-box; }
-  body { font: 14px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #f6f7f9; color: #202124; }
-  header { background: #1a73e8; color: white; padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-  #active-pill { margin-left: auto; background: rgba(255,255,255,0.18); padding: 6px 12px; border-radius: 20px; display: flex; align-items: center; gap: 10px; }
+  body { font: 14px/1.5 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: var(--surface); color: var(--on-surface); }
+  header { background: var(--primary); color: var(--on-primary); padding: 14px 20px; display: flex; align-items: center; gap: 16px; box-shadow: var(--shadow-1); }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+
+  /* === Active timer pill — Chronos "Mini-Player" === */
+  #active-pill { margin-left: auto; background: var(--surface-container); padding: 6px 6px 6px 14px; border-radius: var(--r-xl); display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-2); }
   #active-pill[hidden] { display: none; }
-  #active-pill .name { font-weight: 600; }
-  #active-pill .elapsed { font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
-  #active-pill button { background: white; color: #1a73e8; border: 0; border-radius: 12px; padding: 4px 12px; cursor: pointer; font-weight: 600; }
-  nav.tabs { display: flex; background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0 8px; }
-  nav.tabs button { background: none; border: 0; padding: 14px 18px; cursor: pointer; font-size: 14px; color: #5f6368; border-bottom: 3px solid transparent; margin-bottom: -1px; }
-  nav.tabs button:hover { color: #1a73e8; }
-  nav.tabs button.active { color: #1a73e8; border-bottom-color: #1a73e8; font-weight: 600; }
+  #active-pill .name { font-weight: 600; color: var(--on-surface); }
+  #active-pill .elapsed { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 600; color: var(--secondary); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  #active-pill .dot-live { width: 8px; height: 8px; border-radius: 50%; background: var(--secondary); box-shadow: 0 0 0 4px rgba(0,108,77,0.18); animation: pulse 1.6s ease-in-out infinite; }
+  #active-pill button { background: var(--secondary); color: var(--on-secondary); border: 0; border-radius: var(--r-md); padding: 6px 14px; cursor: pointer; font-weight: 600; }
+  #active-pill button:hover { background: #005a40; }
+  @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.5; transform:scale(1.15);} }
+
+  nav.tabs { display: flex; background: #fff; border-bottom: 1px solid var(--outline-variant); padding: 0 8px; gap: 4px; }
+  nav.tabs button { background: none; border: 0; padding: 14px 18px; cursor: pointer; font-size: 14px; color: var(--on-surface-variant); border-bottom: 3px solid transparent; margin-bottom: -1px; font-weight: 500; }
+  nav.tabs button:hover { color: var(--primary); }
+  nav.tabs button.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
   main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   .view { display: none; }
   .view.active { display: block; }
-  .panel { background: #fff; padding: 16px 20px; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); margin-bottom: 16px; }
-  .panel h3 { margin: 0 0 12px; font-size: 14px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.4px; }
-  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 12px 16px; background: #fff; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); margin-bottom: 16px; }
-  .filters label { color: #5f6368; font-size: 13px; margin-right: 4px; }
+  .panel { background: #fff; padding: 18px 20px; border-radius: var(--r-lg); box-shadow: var(--shadow-1); margin-bottom: 16px; border: 1px solid var(--outline-variant); }
+  .panel h3 { margin: 0 0 14px; font-size: 12px; color: var(--on-surface-variant); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; padding: 14px 18px; background: #fff; border-radius: var(--r-lg); box-shadow: var(--shadow-1); margin-bottom: 16px; border: 1px solid var(--outline-variant); }
+  .filters label { color: var(--on-surface-variant); font-size: 13px; margin-right: 4px; font-weight: 500; }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  input, select, button { font: inherit; padding: 7px 12px; border: 1px solid #dadce0; border-radius: 4px; background: white; }
-  input:focus, select:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 1px #1a73e8; }
-  button { background: #1a73e8; color: white; border: 0; cursor: pointer; font-weight: 500; }
-  button:hover { background: #1557b0; }
-  button.secondary { background: #fff; color: #1a73e8; border: 1px solid #dadce0; }
-  button.secondary:hover { background: #f1f3f4; }
-  button.del { background: #ea4335; padding: 4px 10px; font-size: 12px; }
-  button.del:hover { background: #c5221f; }
-  table.data { background: white; border-collapse: collapse; width: 100%; box-shadow: 0 1px 2px rgba(60,64,67,0.1); border-radius: 8px; overflow: hidden; }
-  table.data th, table.data td { padding: 10px 12px; border-bottom: 1px solid #f1f3f4; text-align: left; vertical-align: middle; }
-  table.data th { background: #f8f9fa; font-weight: 600; color: #5f6368; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+  input, select, button { font: inherit; padding: 8px 14px; border: 1px solid var(--outline-variant); border-radius: var(--r-md); background: white; color: var(--on-surface); transition: border-color .15s, box-shadow .15s; }
+  input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(16,43,138,0.12); }
+  button { background: var(--primary); color: var(--on-primary); border: 0; cursor: pointer; font-weight: 600; }
+  button:hover { background: var(--primary-container); }
+  button.secondary { background: #fff; color: var(--primary); border: 1px solid var(--outline-variant); }
+  button.secondary:hover { background: var(--surface-low); border-color: var(--primary); }
+  button.del { background: var(--error); padding: 5px 12px; font-size: 12px; }
+  button.del:hover { background: #93000a; }
+  table.data { background: white; border-collapse: collapse; width: 100%; box-shadow: var(--shadow-1); border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--outline-variant); }
+  table.data th, table.data td { padding: 12px 14px; border-bottom: 1px solid var(--outline-variant); text-align: left; vertical-align: middle; }
+  table.data th { background: var(--surface-low); font-weight: 600; color: var(--on-surface-variant); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
   table.data tr:last-child td { border-bottom: 0; }
-  table.data input { padding: 4px 8px; width: 100%; border: 1px solid transparent; }
-  table.data input:focus { border-color: #1a73e8; background: #fff; }
-  .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; color: white; font-size: 12px; font-weight: 500; }
+  table.data input { padding: 5px 10px; width: 100%; border: 1px solid transparent; }
+  table.data input:focus { border-color: var(--primary); background: #fff; box-shadow: 0 0 0 3px rgba(16,43,138,0.10); }
+  .chip { display: inline-block; padding: 3px 12px; border-radius: 9999px; color: white; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
   .dot { display: inline-block; width: 18px; height: 18px; border-radius: 50%; vertical-align: middle; }
-  .empty { text-align: center; padding: 40px; color: #80868b; }
-  canvas { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 2px rgba(60,64,67,0.1); }
-  h3.section { margin: 24px 0 12px; font-size: 13px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.4px; }
-  .fold-btn { background: none; color: #5f6368; border: 0; cursor: pointer; font-size: 11px; padding: 2px 6px; width: 24px; line-height: 1; }
-  .fold-btn:hover { background: #f1f3f4; color: #1a73e8; border-radius: 4px; }
-  .fold-btn[disabled] { color: #dadce0; cursor: default; background: none; }
+  .empty { text-align: center; padding: 48px; color: var(--outline); }
+  canvas { background: white; padding: 18px; border-radius: var(--r-lg); box-shadow: var(--shadow-1); border: 1px solid var(--outline-variant); }
+  h3.section { margin: 24px 0 12px; font-size: 12px; color: var(--on-surface-variant); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .fold-btn { background: none; color: var(--on-surface-variant); border: 0; cursor: pointer; font-size: 12px; padding: 4px 8px; width: 28px; line-height: 1; border-radius: var(--r-sm); }
+  .fold-btn:hover { background: var(--surface-low); color: var(--primary); }
+  .fold-btn[disabled] { color: var(--outline-variant); cursor: default; background: none; }
   .grp-hdr { cursor: pointer; user-select: none; }
-  .grp-hdr > td { background: #f1f3f4; font-weight: 600; }
-  .task-total { font-variant-numeric: tabular-nums; }
-  .task-total.zero { color: #80868b; font-weight: normal; }
-  tr.task-entries > td { background: #f8f9fa; padding: 4px 12px 12px; }
+  .grp-hdr > td { background: var(--surface-low); font-weight: 600; }
+  .task-total { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .task-total.zero { color: var(--outline); font-weight: normal; }
+  tr.task-entries > td { background: var(--surface-low); padding: 4px 14px 14px; }
   table.entries-sub { width: 100%; border-collapse: collapse; }
-  table.entries-sub th, table.entries-sub td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eceff1; font-size: 13px; }
-  table.entries-sub th { color: #80868b; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+  table.entries-sub th, table.entries-sub td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--outline-variant); font-size: 13px; }
+  table.entries-sub th { color: var(--on-surface-variant); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
   table.entries-sub tr:last-child td { border-bottom: 0; }
-  table.entries-sub .none { color: #80868b; }
+  table.entries-sub .none { color: var(--outline); }
+  /* numerics in tables — keep digits aligned */
+  table.data td b, .task-total { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* === Mobile (≤720px) — bottom tab bar + stacked panels === */
+  @media (max-width: 720px) {
+    body { padding-bottom: 72px; }
+    header { flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+    header h1 { font-size: 16px; }
+    #active-pill { margin-left: 0; width: 100%; order: 2; }
+    main { padding: 14px 14px 8px; }
+    .panel, .filters { padding: 14px; border-radius: var(--r-lg); }
+    .filters { flex-direction: column; align-items: stretch; }
+    .filters label { display: flex; justify-content: space-between; align-items: center; }
+    form { flex-direction: column; align-items: stretch; }
+    form input, form select, form button { width: 100%; }
+    table.data { display: block; overflow-x: auto; white-space: nowrap; border-radius: var(--r-md); }
+    nav.tabs {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: #fff; border-top: 1px solid var(--outline-variant);
+      border-bottom: 0; padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+      justify-content: space-around; gap: 0; z-index: 10;
+      box-shadow: 0 -4px 12px rgba(16,43,138,0.08);
+    }
+    nav.tabs button { flex: 1; padding: 8px 4px; font-size: 11px; border-bottom: 0; border-radius: var(--r-md); display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+    nav.tabs button::before { content: ''; display: block; width: 22px; height: 22px; border-radius: 6px; background: var(--outline-variant); transition: background .15s; }
+    nav.tabs button.active::before { background: var(--primary); }
+    nav.tabs button.active { color: var(--primary); font-weight: 600; }
+    nav.tabs button[data-view="timer"]::before  { mask: radial-gradient(circle at center, #000 36%, transparent 38%) center/contain no-repeat; -webkit-mask: radial-gradient(circle at center, #000 36%, transparent 38%) center/contain no-repeat; background: currentColor; }
+    nav.tabs button[data-view="log"]::before    { mask: linear-gradient(#000,#000) 6px 8px/10px 2px/2px 8px no-repeat; -webkit-mask: linear-gradient(#000,#000) 6px 8px/10px 2px/2px 8px no-repeat; background: currentColor; }
+    nav.tabs button[data-view="tasks"]::before  { mask: linear-gradient(#000,#000) 4px 5px/14px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/10px 2px no-repeat, linear-gradient(#000,#000) 4px 15px/14px 2px no-repeat; -webkit-mask: linear-gradient(#000,#000) 4px 5px/14px 2px no-repeat, linear-gradient(#000,#000) 4px 10px/10px 2px no-repeat, linear-gradient(#000,#000) 4px 15px/14px 2px no-repeat; background: currentColor; }
+    nav.tabs button[data-view="labels"]::before { mask: linear-gradient(transparent 8px,#000 8px) 0/100% 22px no-repeat; -webkit-mask: linear-gradient(transparent 8px,#000 8px) 0/100% 22px no-repeat; background: currentColor; }
+    nav.tabs button[data-view="stats"]::before  { mask: radial-gradient(circle at 50% 65%, #000 0 7px, transparent 8px) 0/100% 22px no-repeat; -webkit-mask: radial-gradient(circle at 50% 65%, #000 0 7px, transparent 8px) 0/100% 22px no-repeat; background: currentColor; }
+    nav.tabs button::before { color: var(--outline-variant); }
+    nav.tabs button.active::before { color: var(--primary); }
+    /* ponytail: native view-transitions slide — degrades silently if API unsupported */
+    ::view-transition-old(main), ::view-transition-new(main) { animation-duration: 180ms; animation-timing-function: ease-out; }
+    ::view-transition-old(main) { animation-name: slide-out-left; }
+    ::view-transition-new(main) { animation-name: slide-in-right; }
+    @keyframes slide-out-left  { to { transform: translateX(-30px); opacity: 0; } }
+    @keyframes slide-in-right  { from { transform: translateX(30px); opacity: 0; } }
+  }
 </style>
 </head>
 <body>
@@ -65,6 +141,7 @@
 <header>
   <h1>TaskTime</h1>
   <div id="active-pill" hidden>
+    <span class="dot-live"></span>
     <span class="name" id="active-task-name"></span>
     <span class="elapsed" id="active-elapsed">00:00:00</span>
     <button id="stop-btn">Stop</button>
@@ -271,14 +348,30 @@ async function init() {
 
 function bindTabs() {
   $$('.tabs button').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+  // ponytail: native touch swipe between tabs — no lib, 50px threshold, vertical scroll wins
+  let tx = null;
+  document.addEventListener('touchstart', e => { if (e.touches.length === 1) tx = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend',   e => {
+    if (tx == null) return;
+    const dx = e.changedTouches[0].clientX - tx; tx = null;
+    if (Math.abs(dx) < 50) return;
+    const order = ['timer','log','tasks','labels','stats'];
+    const cur = order.indexOf($('.tabs button.active')?.dataset.view);
+    const next = dx < 0 ? Math.min(cur+1, order.length-1) : Math.max(cur-1, 0);
+    if (next >= 0 && next !== cur) showView(order[next]);
+  }, { passive: true });
 }
 function showView(name) {
-  $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
-  $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
-  if (name === 'log') renderLog();
-  if (name === 'tasks') renderTasksView();
-  if (name === 'labels') renderLabelsView();
-  if (name === 'stats') renderStats();
+  const swap = () => {
+    $$('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
+    if (name === 'log') renderLog();
+    if (name === 'tasks') renderTasksView();
+    if (name === 'labels') renderLabelsView();
+    if (name === 'stats') renderStats();
+  };
+  // ponytail: native view-transitions API — fall through silently on unsupported browsers
+  if (document.startViewTransition) document.startViewTransition(swap); else swap();
 }
 
 function bindGlobal() {
