@@ -414,7 +414,12 @@ const state = {
 const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
-const fmtHM = (min) => `${Math.floor(min/60)}h ${String(min%60).padStart(2,'0')}m`;
+// ponytail: minutes always rendered with 2 decimals so live sessions show 1.23m instead of 1m
+const fmtHM = (min) => {
+  const h = Math.floor(min / 60);
+  const m = min - h * 60;
+  return h ? `${h}h ${m.toFixed(2)}m` : `${m.toFixed(2)}m`;
+};
 const fmtHMS = (ms) => {
   const s = Math.max(0, Math.floor(ms/1000));
   return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
@@ -615,6 +620,12 @@ function tick() {
     const liveMin = ms / 60000;
     $('#stat-time-today').textContent = fmtHM(todayBaseMinutes() + liveMin);
     $('#stat-time-today-sub').textContent = '+ live session';
+  }
+  // ponytail: tick the active task's row in "Up next" if it appears there
+  const upTime = document.querySelector(`#up-next-list .row[data-tid="${state.activeTimer.taskId}"] .time`);
+  if (upTime) {
+    const wkMin = Number(upTime.dataset.wkMin) || 0;
+    upTime.textContent = fmtHM(wkMin + ms / 60000);
   }
 }
 function stopTicker() {
@@ -1088,7 +1099,7 @@ function renderDashboard() {
     list.innerHTML = top5.map(([tid, min]) => {
       const lid = taskLabelId(tid);
       const tag = lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '';
-      return `<div class="row"><div class="name">${escapeHtml(taskName(tid))} ${tag}</div><div class="time">${fmtHM(min)}</div></div>`;
+      return `<div class="row" data-tid="${tid}"><div class="name">${escapeHtml(taskName(tid))} ${tag}</div><div class="time" data-wk-min="${min}">${fmtHM(min)}</div></div>`;
     }).join('');
   }
 
