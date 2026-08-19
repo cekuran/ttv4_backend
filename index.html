@@ -414,12 +414,7 @@ const state = {
 const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
-// ponytail: minutes always rendered with 2 decimals so live sessions show 1.23m instead of 1m
-const fmtHM = (min) => {
-  const h = Math.floor(min / 60);
-  const m = min - h * 60;
-  return h ? `${h}h ${m.toFixed(2)}m` : `${m.toFixed(2)}m`;
-};
+const fmtHM = (min) => `${Math.floor(min/60)}h ${String(Math.floor(min%60)).padStart(2,'0')}m`;
 const fmtHMS = (ms) => {
   const s = Math.max(0, Math.floor(ms/1000));
   return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
@@ -618,14 +613,14 @@ function tick() {
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   if (start >= todayStart) {
     const liveMin = ms / 60000;
-    $('#stat-time-today').textContent = fmtHM(todayBaseMinutes() + liveMin);
+    $('#stat-time-today').textContent = fmtHMS((todayBaseMinutes() + liveMin) * 60000);
     $('#stat-time-today-sub').textContent = '+ live session';
   }
   // ponytail: tick the active task's row in "Up next" if it appears there
   const upTime = document.querySelector(`#up-next-list .row[data-tid="${state.activeTimer.taskId}"] .time`);
   if (upTime) {
     const wkMin = Number(upTime.dataset.wkMin) || 0;
-    upTime.textContent = fmtHM(wkMin + ms / 60000);
+    upTime.textContent = fmtHMS((wkMin + ms / 60000) * 60000);
   }
 }
 function stopTicker() {
@@ -1076,7 +1071,7 @@ function renderDashboard() {
   const todayMin     = todayEntries.reduce((s,e) => s + Number(e.durationMinutes||0), 0);
   const todayTasks   = new Set(todayEntries.map(e => e.taskId)).size;
   const todayCount   = todayEntries.length;
-  $('#stat-time-today').textContent     = fmtHM(todayMin);
+  $('#stat-time-today').textContent     = fmtHMS(todayMin * 60000);
   $('#stat-time-today-sub').textContent = todayCount ? `Across ${todayTasks} task${todayTasks===1?'':'s'}` : 'No time logged today';
   $('#stat-tasks-today').textContent    = todayTasks;
   $('#stat-entries-today').textContent  = todayCount;
