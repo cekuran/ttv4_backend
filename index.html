@@ -608,11 +608,26 @@ function tick() {
   if (!state.activeTimer) return;
   const ms = Date.now() - new Date(state.activeTimer.startTime).getTime();
   $('#active-elapsed').textContent = fmtHMS(ms);
+  // ponytail: also fold live elapsed into "time today" while a timer is running
+  const start = new Date(state.activeTimer.startTime);
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  if (start >= todayStart) {
+    const liveMin = ms / 60000;
+    $('#stat-time-today').textContent = fmtHM(todayBaseMinutes() + liveMin);
+    $('#stat-time-today-sub').textContent = '+ live session';
+  }
 }
 function stopTicker() {
   if (state.tickInterval) clearInterval(state.tickInterval);
   state.tickInterval = null;
   renderActiveCard();
+}
+function todayBaseMinutes() {
+  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  const todayEnd   = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
+  return state.entries
+    .filter(e => { const d = new Date(e.startTime); return d >= todayStart && d < todayEnd; })
+    .reduce((s, e) => s + Number(e.durationMinutes || 0), 0);
 }
 function renderActiveCard() {
   const card = $('#active-card');
