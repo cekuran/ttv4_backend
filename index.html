@@ -176,6 +176,7 @@
   .task-card .del-btn { background: transparent; color: var(--outline); border: 0; padding: 6px 10px; cursor: pointer; font-size: 12px; border-radius: var(--r-sm); font-weight: 500; }
   .task-card .del-btn:hover { background: rgba(186,26,26,0.08); color: var(--error); }
   .task-card.collapsed .task-entries { display: none; }
+  .task-card.active { border-color: var(--secondary); background: linear-gradient(135deg, rgba(0,108,77,0.05), rgba(0,108,77,0.02)); box-shadow: 0 0 0 1px var(--secondary), var(--shadow-2); }
 
   /* === Reports === */
   .report-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 20px; }
@@ -593,8 +594,10 @@ async function onStop() {
   await gs('stopTimer');
   state.activeTimer = null;
   stopTicker();
+  clearTaskLiveTicks();
   state.entries = await gs('getEntries');
   if ($('#view-dashboard').classList.contains('active')) renderDashboard();
+  if ($('#view-tasks').classList.contains('active'))    renderTasksView();
   if ($('#view-habits').classList.contains('active'))    renderHabits();
   if ($('#view-stats').classList.contains('active'))     renderStats();
 }
@@ -622,6 +625,15 @@ function tick() {
     const wkMin = Number(upTime.dataset.wkMin) || 0;
     upTime.textContent = fmtHMS((wkMin + ms / 60000) * 60000);
   }
+  // ponytail: tick the active task's card in Tasks view (if rendered)
+  const liveEl = document.querySelector(`.task-total[data-tid="${state.activeTimer.taskId}"] .task-live`);
+  if (liveEl) {
+    liveEl.style.display = '';
+    liveEl.textContent = '· ' + fmtHMS(ms);
+  }
+}
+function clearTaskLiveTicks() {
+  $$('.task-live').forEach(el => { el.style.display = 'none'; el.textContent = ''; });
 }
 function stopTicker() {
   if (state.tickInterval) clearInterval(state.tickInterval);
@@ -815,7 +827,7 @@ async function renderTasksView() {
     const labelObj = lid ? labelById(lid) : null;
     const labelTag = labelObj ? `<span class="chip" style="background:${labelObj.color}">${escapeHtml(labelObj.name)}</span>` : '';
     const labelOpts = `<option value="">—</option>` + state.labels.map(l => `<option value="${l.id}" ${l.id===lid?'selected':''}>${escapeHtml(l.name)}</option>`).join('');
-    html += `<div class="task-card" data-tid="${t.id}">
+    html += `<div class="task-card${state.activeTimer && state.activeTimer.taskId === t.id ? ' active' : ''}" data-tid="${t.id}">
       <div class="task-info">
         <div class="task-name"><input data-id="${t.id}" class="edit-name" value="${escapeHtml(t.name)}"></div>
         <div class="task-meta">
@@ -825,7 +837,7 @@ async function renderTasksView() {
         </div>
         <div class="task-entries" id="task-entries-${t.id}" style="display:none; margin-top:10px;"></div>
       </div>
-      <div class="task-total${total ? '' : ' zero'}">${fmtHM(total)}</div>
+      <div class="task-total${total ? '' : ' zero'}" data-tid="${t.id}">${fmtHM(total)}<span class="task-live" style="display:none; margin-left:6px; color:var(--secondary); font-weight:600;"></span></div>
       <button class="play-btn" data-id="${t.id}" title="Start timer" ${state.tasks.find(x=>x.id===t.id) ? '' : 'disabled'}>▶</button>
       <button class="del-btn" data-id="${t.id}">Delete</button>
     </div>`;
