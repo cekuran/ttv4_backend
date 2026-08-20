@@ -1,3 +1,7 @@
 **/**
 !Code.js
 !appsscript.json
+*.md
+.git/**
+*.bak
+.gitignore
