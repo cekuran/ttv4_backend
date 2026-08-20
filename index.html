@@ -300,7 +300,7 @@
       </div>
 
       <div class="up-next" id="up-next">
-        <h3>Up next · top tasks this week</h3>
+        <h3>Up next · top tasks</h3>
         <div id="up-next-list"></div>
       </div>
     </section>
@@ -1096,20 +1096,15 @@ function renderDashboard() {
   $('#stat-tasks-today').textContent    = todayTasks;
   $('#stat-entries-today').textContent  = todayCount;
 
-  // Up next: top 5 tasks by total time this week
-  const now = new Date();
-  const dow = (now.getDay() + 6) % 7;
-  const wkStart = new Date(now); wkStart.setDate(now.getDate() - dow); wkStart.setHours(0,0,0,0);
-  const wkTotals = new Map();
+  // Up next: top 5 tasks by all-time total (matches Tasks view totals)
+  const taskTotals = new Map();
   state.entries.forEach(e => {
-    const d = new Date(e.startTime);
-    if (d < wkStart) return;
-    wkTotals.set(e.taskId, (wkTotals.get(e.taskId) || 0) + Number(e.durationMinutes||0));
+    taskTotals.set(e.taskId, (taskTotals.get(e.taskId) || 0) + Number(e.durationMinutes||0));
   });
-  const top5 = [...wkTotals.entries()].sort((a,b) => b[1]-a[1]).slice(0,5);
+  const top5 = [...taskTotals.entries()].sort((a,b) => b[1]-a[1]).slice(0,5);
   const list = $('#up-next-list');
   if (top5.length === 0) {
-    list.innerHTML = `<div class="empty-row">No time logged this week yet.</div>`;
+    list.innerHTML = `<div class="empty-row">No time logged yet.</div>`;
   } else {
     list.innerHTML = top5.map(([tid, min]) => {
       const lid = taskLabelId(tid);
