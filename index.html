@@ -145,6 +145,10 @@
   .up-next h3 { margin: 0 0 12px; font-size: 12px; color: var(--on-surface-variant); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
   .up-next .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--surface-low); }
   .up-next .row:last-child { border-bottom: 0; }
+  .up-next .row.active { background: rgba(0,108,77,0.06); border-radius: var(--r-md); padding-left: 10px; margin-left: -10px; padding-right: 10px; margin-right: -10px; }
+  .up-next .row-stop-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--secondary); color: var(--on-secondary); border: 0; cursor: pointer; flex-shrink: 0; position: relative; transition: background-color .2s; }
+  .up-next .row-stop-btn:hover { background: #005a40; }
+  .up-next .row-stop-btn::after { content: ''; position: absolute; top: 50%; left: 50%; width: 11px; height: 11px; background: currentColor; transform: translate(-50%, -50%); clip-path: polygon(18% 18%, 82% 18%, 82% 82%, 18% 82%); }
   .up-next .row .name { flex: 1; font-weight: 500; font-size: 14px; }
   .up-next .row .time { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; color: var(--on-surface-variant); font-variant-numeric: tabular-nums; }
   .up-next .empty-row { color: var(--outline); font-size: 13px; padding: 8px 0; }
@@ -1110,8 +1114,11 @@ function renderDashboard() {
     list.innerHTML = top5.map(([tid, min]) => {
       const lid = taskLabelId(tid);
       const tag = lid ? `<span class="chip" style="background:${labelColor(lid)}">${escapeHtml(labelName(lid))}</span>` : '';
-      return `<div class="row" data-tid="${tid}"><div class="name">${escapeHtml(taskName(tid))} ${tag}</div><div class="time" data-wk-min="${min}">${fmtHM(min)}</div></div>`;
+      const isActive = state.activeTimer && state.activeTimer.taskId === tid;
+      const stopBtn = isActive ? `<button class="row-stop-btn" data-tid="${tid}" title="Stop timer" aria-label="Stop timer"></button>` : '';
+      return `<div class="row${isActive ? ' active' : ''}" data-tid="${tid}"><div class="name">${escapeHtml(taskName(tid))} ${tag}</div><div class="time" data-wk-min="${min}">${fmtHMS(min * 60000)}</div>${stopBtn}</div>`;
     }).join('');
+    $$('.row-stop-btn').forEach(b => b.onclick = onStop);
   }
 
   // Populate quickstart
