@@ -725,15 +725,39 @@ function ping() {
   return { ok: ok, version: APP_VERSION };
 }
 
-function configurarSpreadsheetMaestro(id) {
+function configurarSpreadsheetMaestro(id, adminUsername, adminPassword) {
   const limpio = String(id || '').trim();
   if (!/^[A-Za-z0-9_-]{20,}$/.test(limpio)) throw new Error('ID de spreadsheet inválido');
   // Validación temprana: el script debe tener acceso de edición al spreadsheet.
   SpreadsheetApp.openById(limpio);
   setMasterSpreadsheetId_(limpio);
-  // Forzar lectura/seed del admin por defecto en el siguiente loginUsuario.
   invalidarAuthCache_('Usuarios');
   invalidarAuthCache_('Config');
+
+  // Seed inicial opcional del admin. Si se pasan username/password, se usa
+  // esa pareja; si no, cae al seed por defecto (admin / admin1234) sólo si
+  // la hoja Usuarios está vacía.
+  const user = String(adminUsername || '').trim();
+  const pass = String(adminPassword || '');
+  const quiereCustom = !!(user || pass);
+  if (quiereCustom) {
+    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(user || DEFAULT_ADMIN_USERNAME)) {
+      throw new Error('Usuario admin inválido (3-40, letras, números, _.-)');
+    }
+    if (pass.length < 8) throw new Error('La contraseña admin debe tener mínimo 8 caracteres');
+    const salt = Utilities.getUuid().replace(/-/g, '');
+    escribirUsuariosAuth_([{
+      username: user || DEFAULT_ADMIN_USERNAME,
+      password_hash: passwordHash_(pass, salt),
+      salt: salt,
+      rol: ROLES.ADMIN,
+      activo: true,
+      fecha_creacion: isoAhora_()
+    }]);
+  } else {
+    // Disparar el seed por defecto si la hoja Usuarios aún no tiene filas.
+    asegurarUsuarios_();
+  }
   return { ok: true, configurado: true };
 }
 
