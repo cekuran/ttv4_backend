@@ -1,9 +1,16 @@
 // TaskTime — server (Google Apps Script WebApp).
-// Storage: Google Sheets (Tasks, Labels, TimeEntries — auto-created on first load).
-// Active timer persisted via UserProperties (per-user, per-script).
+//
+// Two spreadsheets:
+//   - MASTER (one, configured via SPREADSHEET_ID Script Property or
+//     configurarSpreadsheetMaestro API): holds the auth tables (Usuarios,
+//     Spreadsheets, HojasUsuarios, Tokens, Config).
+//   - PER-USER (one per linked user, listed in HojasUsuarios): holds the
+//     time-tracking data (Tasks, Labels, TimeEntries). Auto-created by
+//     ensureSchema_ when bootstrap runs.
 //
 // API surface: doGet / doPost dispatch via dispatchApi_(). Frontend calls
-// `call('action', ...args)` from a static page hosted elsewhere.
+// `call('action', ...args)` from a static page hosted elsewhere, with
+// `{ token }` pulled from localStorage.
 
 const SHEETS = {
   Tasks:        ['id', 'name', 'labelId', 'createdAt'],
@@ -11,21 +18,736 @@ const SHEETS = {
   TimeEntries:  ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt']
 };
 
+const AUTH_SCHEMA = {
+  Usuarios:       ['username', 'password_hash', 'salt', 'rol', 'activo', 'fecha_creacion'],
+  Spreadsheets:   ['spreadsheet_id', 'nombre', 'descripcion', 'fecha_alta'],
+  HojasUsuarios:  ['username', 'spreadsheet_id', 'por_defecto', 'fecha_alta'],
+  Tokens:         ['token', 'username', 'fecha_creacion'],
+  Config:         ['clave', 'valor']
+};
+
+const ROLES = { ADMIN: 'admin', BASICO: 'basico' };
+const APP_VERSION = 'ms-http-1';
+const MASTER_PROP_KEY = 'SPREADSHEET_ID';
+const CONFIG_MASTER_SHEET_ID = 'MASTER_SPREADSHEET_ID';
+const DEFAULT_ADMIN_USERNAME = 'admin';
+const DEFAULT_ADMIN_PASSWORD = 'admin1234';
+
 const PALETTE = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','#FF6D00','#7B1FA2'];
 
-function ss_() {
-  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  if (!id) throw new Error('SPREADSHEET_ID not set. Run setSpreadsheetId("your-sheet-id") from the script editor once, or set it in Project Settings → Script Properties.');
+// ───────── Auth primitives ─────────
+
+function bytesHex_(bytes) {
+  return bytes.map(function (b) {
+    const h = (b < 0 ? b + 256 : b).toString(16);
+    return h.length === 1 ? '0' + h : h;
+  }).join('');
+}
+
+function sha256Hex_(text) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8);
+  return bytesHex_(digest);
+}
+
+function passwordHash_(password, salt) {
+  let h = String(salt || '') + '|' + String(password || '');
+  for (let i = 0; i < 12000; i++) h = sha256Hex_(h);
+  return h;
+}
+
+function isoAhora_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Europe/Madrid', "yyyy-MM-dd'T'HH:mm:ss");
+}
+
+// ───────── Spreadsheet access ─────────
+
+function getMasterSpreadsheetId_() {
+  // 1) Config del master sheet (clave en la propia hoja Config del master)
+  // 2) Script Property legacy SPREADSHEET_ID
+  try {
+    const cfg = obtenerConfig_(CONFIG_MASTER_SHEET_ID);
+    if (cfg) return cfg;
+  } catch (e) { /* master aún no existe */ }
+  return PropertiesService.getScriptProperties().getProperty(MASTER_PROP_KEY) || '';
+}
+
+function setMasterSpreadsheetId_(id) {
+  const limpio = String(id || '').trim();
+  if (!limpio) throw new Error('Indica un spreadsheet ID válido');
+  PropertiesService.getScriptProperties().setProperty(MASTER_PROP_KEY, limpio);
+  return limpio;
+}
+
+function authSs_() {
+  const id = getMasterSpreadsheetId_();
+  if (!id) throw new Error('Master spreadsheet no configurado. Llama a configurarSpreadsheetMaestro(id) primero.');
   return SpreadsheetApp.openById(id);
 }
 
-function setSpreadsheetId(id) {
-  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', String(id).trim());
-  return id;
+function ssActiva_() {
+  // Hoja de datos del usuario activo. Si _currentSheetId está resuelto (por
+  // _authadmin / bootstrap), abre esa; en caso contrario cae al master.
+  if (_currentSheetId) {
+    try { return SpreadsheetApp.openById(_currentSheetId); }
+    catch (e) { /* id inválido: fallback */ }
+  }
+  return authSs_();
 }
 
-function ensureSchema_() {
-  const ss = ss_();
+// ───────── Estado request-scoped ─────────
+
+let _currentToken = '';
+let _currentSheetId = '';
+
+function currentUser_() {
+  if (!_currentToken) return '';
+  return validarTokenSesion_(_currentToken);
+}
+
+function requireUsuario_() {
+  const u = currentUser_();
+  if (!u) throw new Error('No autenticado');
+  return u;
+}
+
+function currentRol_() {
+  const u = currentUser_();
+  if (!u) return '';
+  const row = buscarUsuario_(u);
+  return row ? String(row.rol || ROLES.BASICO) : '';
+}
+
+function requireAdmin_() {
+  if (currentRol_() !== ROLES.ADMIN) throw new Error('Solo admin puede realizar esta acción');
+}
+
+// Endpoints disponibles aunque el usuario autenticado no tenga hojas
+// vinculadas (no son admin). El resto fallan rápido para no filtrar
+// datos del spreadsheet equivocado.
+const ALWAYS_ALLOWED_FOR_NO_HOJAS = new Set([
+  'authStatus', 'loginUsuario', 'logoutUsuario', 'ping',
+  'configurarSpreadsheetMaestro', 'bootstrapBase', 'bootstrap',
+  'listarMisHojas', 'cambiarHojaActiva', 'cambiarMiContrasena'
+]);
+
+function usuarioTieneHojas_(username) {
+  if (!username) return false;
+  return leerHojasUsuarios_().some(l =>
+    String(l.username || '').trim().toLowerCase() === String(username || '').trim().toLowerCase()
+  );
+}
+
+function _authadmin(token, fnName, ...args) {
+  const username = validarTokenSesion_(token);
+  if (!username) throw new Error('No autenticado');
+  _currentToken = String(token || '').trim();
+  try { _currentSheetId = resolverHojaActivaId_(username); }
+  catch (e) { _currentSheetId = ''; }
+  const usuario = buscarUsuario_(username);
+  const rol = usuario ? String(usuario.rol || ROLES.BASICO) : ROLES.BASICO;
+  if (rol !== ROLES.ADMIN && !usuarioTieneHojas_(username) && !ALWAYS_ALLOWED_FOR_NO_HOJAS.has(fnName)) {
+    throw new Error('No tienes hojas de cálculo asignadas. Pide al administrador que vincule una hoja.');
+  }
+  const fn = globalThis[fnName];
+  if (typeof fn !== 'function') throw new Error('Función no encontrada: ' + fnName);
+  return fn.apply(null, args);
+}
+
+// ───────── Auth sheet helpers ─────────
+
+function asegurarAuthHojaGenerica_(nombre) {
+  const ss = authSs_();
+  const cab = AUTH_SCHEMA[nombre];
+  let h = ss.getSheetByName(nombre);
+  if (!h) {
+    h = ss.insertSheet(nombre);
+    h.getRange(1, 1, 1, cab.length).setValues([cab]).setFontWeight('bold');
+    h.setFrozenRows(1);
+  } else if (h.getLastRow() === 0) {
+    h.getRange(1, 1, 1, cab.length).setValues([cab]).setFontWeight('bold');
+    h.setFrozenRows(1);
+  }
+  return h;
+}
+
+const _authReadCache = {};
+function _authCacheKey_(nombre) { return nombre; }
+
+function leerAuthHojaGenerica_(nombre) {
+  if (_authReadCache[_authCacheKey_(nombre)]) return cloneRows_(_authReadCache[_authCacheKey_(nombre)]);
+  const h = asegurarAuthHojaGenerica_(nombre);
+  const valores = h.getDataRange().getValues();
+  if (valores.length < 2) {
+    _authReadCache[_authCacheKey_(nombre)] = [];
+    return [];
+  }
+  const cab = valores[0];
+  const rows = valores.slice(1).map(fila => {
+    const o = {};
+    cab.forEach((k, i) => (o[k] = fila[i]));
+    return o;
+  });
+  _authReadCache[_authCacheKey_(nombre)] = rows;
+  return cloneRows_(rows);
+}
+
+function escribirAuthHojaGenerica_(nombre, filas) {
+  const h = asegurarAuthHojaGenerica_(nombre);
+  const cab = AUTH_SCHEMA[nombre];
+  h.clearContents();
+  const filasSafe = filas || [];
+  const matriz = [cab].concat(filasSafe.map(f => cab.map(k => f[k] != null ? f[k] : '')));
+  if (matriz.length) h.getRange(1, 1, matriz.length, cab.length).setValues(matriz);
+  h.setFrozenRows(1);
+  _authReadCache[_authCacheKey_(nombre)] = cloneRows_(filasSafe);
+}
+
+function cloneRows_(rows) {
+  return (rows || []).map(r => Object.assign({}, r));
+}
+
+function invalidarAuthCache_(nombre) {
+  if (nombre) delete _authReadCache[_authCacheKey_(nombre)];
+}
+
+function leerUsuariosAuth_() {
+  const rows = leerAuthHojaGenerica_('Usuarios');
+  return rows.map(normalizarUsuarioAuth_);
+}
+
+function normalizarUsuarioAuth_(u) {
+  if (!u) return u;
+  const rol = String(u.rol || '').trim();
+  u.rol = rol || (String(u.username || '').trim().toLowerCase() === DEFAULT_ADMIN_USERNAME ? ROLES.ADMIN : ROLES.BASICO);
+  return u;
+}
+
+function escribirUsuariosAuth_(filas) {
+  const normalizadas = (filas || []).map(f => normalizarUsuarioAuth_(Object.assign({}, f)));
+  escribirAuthHojaGenerica_('Usuarios', normalizadas);
+}
+
+function leerSpreadsheets_() { return leerAuthHojaGenerica_('Spreadsheets'); }
+function escribirSpreadsheets_(filas) { escribirAuthHojaGenerica_('Spreadsheets', filas); }
+function leerHojasUsuarios_() { return leerAuthHojaGenerica_('HojasUsuarios'); }
+function escribirHojasUsuarios_(filas) { escribirAuthHojaGenerica_('HojasUsuarios', filas); }
+
+function resolverHojaActivaId_(username) {
+  username = String(username || '').trim();
+  if (!username) return '';
+  const links = leerHojasUsuarios_().filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
+  const defecto = links.find(l => String(l.por_defecto) === 'true' || String(l.por_defecto) === true);
+  if (defecto) return String(defecto.spreadsheet_id);
+  if (links.length) return String(links[0].spreadsheet_id);
+  return '';
+}
+
+function listarHojasDelUsuario_(username) {
+  const links = leerHojasUsuarios_().filter(l =>
+    String(l.username || '').trim().toLowerCase() === String(username || '').trim().toLowerCase()
+  );
+  const todas = leerSpreadsheets_();
+  const porId = {};
+  todas.forEach(s => { porId[String(s.spreadsheet_id)] = s; });
+  return links.map(l => {
+    const meta = porId[String(l.spreadsheet_id)] || {};
+    return {
+      spreadsheet_id: String(l.spreadsheet_id),
+      nombre: meta.nombre || '(sin nombre)',
+      descripcion: meta.descripcion || '',
+      por_defecto: String(l.por_defecto) === 'true' || l.por_defecto === true
+    };
+  });
+}
+
+function obtenerConfig_(clave) {
+  const fila = leerAuthHojaGenerica_('Config').find(r => String(r.clave || '') === clave);
+  return fila ? String(fila.valor || '').trim() : '';
+}
+
+function guardarConfig_(clave, valor) {
+  const filas = leerAuthHojaGenerica_('Config');
+  const existente = filas.find(r => String(r.clave || '') === clave);
+  if (existente) existente.valor = String(valor || '').trim();
+  else filas.push({ clave: clave, valor: String(valor || '').trim() });
+  escribirAuthHojaGenerica_('Config', filas);
+  return String(valor || '').trim();
+}
+
+// ───────── Sesión ─────────
+
+function crearTokenSesion_(username) {
+  const token = Utilities.getUuid();
+  const usernameNorm = String(username || '').trim();
+  const filas = leerAuthHojaGenerica_('Tokens');
+  filas.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
+  escribirAuthHojaGenerica_('Tokens', filas);
+  return token;
+}
+
+function validarTokenSesion_(token) {
+  const t = String(token || '').trim();
+  if (!t) return '';
+  const fila = leerAuthHojaGenerica_('Tokens').find(r => String(r.token || '') === t);
+  const username = fila ? String(fila.username || '').trim() : '';
+  return username;
+}
+
+function invalidarTokenSesion_(token) {
+  const t = String(token || '').trim();
+  if (!t) return;
+  escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t));
+}
+
+// ───────── Usuarios ─────────
+
+function asegurarUsuarios_() {
+  asegurarAuthHojaGenerica_('Usuarios');
+  const rows = leerUsuariosAuth_().filter(r => r.username);
+  if (rows.length) return;
+
+  // Seed admin por defecto. La contraseña inicial debe cambiarse en el primer login.
+  const salt = Utilities.getUuid().replace(/-/g, '');
+  escribirUsuariosAuth_([{
+    username: DEFAULT_ADMIN_USERNAME,
+    password_hash: passwordHash_(DEFAULT_ADMIN_PASSWORD, salt),
+    salt: salt,
+    rol: ROLES.ADMIN,
+    activo: true,
+    fecha_creacion: isoAhora_()
+  }]);
+}
+
+function buscarUsuario_(username) {
+  const target = String(username || '').trim().toLowerCase();
+  if (!target) return null;
+  return leerUsuariosAuth_().find(u => String(u.username || '').trim().toLowerCase() === target) || null;
+}
+
+function authStatus(token) {
+  const tokenUser = token ? validarTokenSesion_(token) : '';
+  if (tokenUser) _currentToken = String(token || '').trim();
+  else _currentToken = '';
+  const rol = tokenUser ? (buscarUsuario_(tokenUser) || {}).rol || ROLES.BASICO : '';
+  return { authenticated: !!tokenUser, user: tokenUser || '', rol: rol || '' };
+}
+
+function loginUsuario(username, password) {
+  asegurarUsuarios_();
+  const user = String(username || '').trim();
+  const pass = String(password || '');
+  if (!user || !pass) throw new Error('Debes indicar usuario y contraseña');
+  const found = buscarUsuario_(user);
+  if (!found || String(found.activo) === 'false') throw new Error('Credenciales inválidas');
+  const hash = passwordHash_(pass, String(found.salt || ''));
+  if (hash !== String(found.password_hash || '')) throw new Error('Credenciales inválidas');
+  const token = crearTokenSesion_(found.username);
+  return { ok: true, user: found.username, rol: String(found.rol || ROLES.BASICO), token: token };
+}
+
+function logoutUsuario(token) {
+  invalidarTokenSesion_(token);
+  _currentToken = '';
+  return { ok: true };
+}
+
+function crearUsuarioAdmin(username, password, rol) {
+  requireAdmin_();
+  asegurarUsuarios_();
+  const user = String(username || '').trim();
+  const pass = String(password || '');
+  const rolFinal = String(rol || ROLES.BASICO).trim().toLowerCase();
+  if (!Object.values(ROLES).includes(rolFinal)) throw new Error('Rol inválido');
+  if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(user)) throw new Error('Usuario inválido (3-40, letras, números, _.-)');
+  if (pass.length < 8) throw new Error('La contraseña debe tener mínimo 8 caracteres');
+  if (buscarUsuario_(user)) throw new Error('Ese usuario ya existe');
+  const salt = Utilities.getUuid().replace(/-/g, '');
+  const rows = leerUsuariosAuth_();
+  rows.push({
+    username: user,
+    password_hash: passwordHash_(pass, salt),
+    salt: salt,
+    rol: rolFinal,
+    activo: true,
+    fecha_creacion: isoAhora_()
+  });
+  escribirUsuariosAuth_(rows);
+  return { ok: true, user: user, rol: rolFinal };
+}
+
+function listarUsuariosAdmin() {
+  requireAdmin_();
+  asegurarUsuarios_();
+  return leerUsuariosAuth_().map(u => ({
+    username: u.username,
+    rol: String(u.rol || ROLES.BASICO),
+    activo: String(u.activo) !== 'false',
+    fecha_creacion: u.fecha_creacion || ''
+  }));
+}
+
+function resetearContrasenaAdmin(username, passwordNueva) {
+  requireAdmin_();
+  asegurarUsuarios_();
+  const user = String(username || '').trim();
+  const nueva = String(passwordNueva || '');
+  if (!user) throw new Error('Debes indicar el usuario');
+  if (nueva.length < 8) throw new Error('La nueva contraseña debe tener mínimo 8 caracteres');
+  const rows = leerUsuariosAuth_();
+  const idx = rows.findIndex(u => String(u.username || '').trim().toLowerCase() === user.toLowerCase());
+  if (idx < 0) throw new Error('Usuario no encontrado');
+  rows[idx].salt = Utilities.getUuid().replace(/-/g, '');
+  rows[idx].password_hash = passwordHash_(nueva, rows[idx].salt);
+  escribirUsuariosAuth_(rows);
+  return { ok: true, user: user };
+}
+
+function cambiarRolUsuarioAdmin(username, rol) {
+  requireAdmin_();
+  asegurarUsuarios_();
+  const actor = currentUser_();
+  const user = String(username || '').trim();
+  const rolFinal = String(rol || ROLES.BASICO).trim().toLowerCase();
+  if (!Object.values(ROLES).includes(rolFinal)) throw new Error('Rol inválido');
+  const rows = leerUsuariosAuth_();
+  const idx = rows.findIndex(u => String(u.username || '').trim().toLowerCase() === user.toLowerCase());
+  if (idx < 0) throw new Error('Usuario no encontrado');
+  if (rolFinal !== ROLES.ADMIN) {
+    const adminsRestantes = rows.filter(u => String(u.rol) === ROLES.ADMIN && String(u.username || '').trim().toLowerCase() !== user.toLowerCase()).length;
+    const esMismoActor = String(rows[idx].username || '').trim().toLowerCase() === String(actor || '').trim().toLowerCase();
+    if (esMismoActor && adminsRestantes === 0) throw new Error('No puedes quitarte el último admin');
+  }
+  rows[idx].rol = rolFinal;
+  escribirUsuariosAuth_(rows);
+  return { ok: true, user: user, rol: rolFinal };
+}
+
+function eliminarUsuarioAdmin(username) {
+  requireAdmin_();
+  asegurarUsuarios_();
+  const actor = currentUser_();
+  const user = String(username || '').trim();
+  if (!user) throw new Error('Debes indicar el usuario');
+  const rows = leerUsuariosAuth_();
+  const idx = rows.findIndex(u => String(u.username || '').trim().toLowerCase() === user.toLowerCase());
+  if (idx < 0) throw new Error('Usuario no encontrado');
+  if (String(rows[idx].username || '').trim().toLowerCase() === String(actor || '').trim().toLowerCase()) {
+    throw new Error('No puedes eliminarte a ti mismo');
+  }
+  if (String(rows[idx].rol) === ROLES.ADMIN) {
+    const otrosAdmins = rows.filter(u => String(u.rol) === ROLES.ADMIN && String(u.username || '').trim().toLowerCase() !== user.toLowerCase()).length;
+    if (otrosAdmins === 0) throw new Error('No puedes eliminar al último admin');
+  }
+  rows.splice(idx, 1);
+  escribirUsuariosAuth_(rows);
+  // Limpiar vinculaciones del usuario eliminado.
+  const links = leerHojasUsuarios_().filter(l => String(l.username || '').trim().toLowerCase() !== user.toLowerCase());
+  escribirHojasUsuarios_(links);
+  invalidarTokensDeUsuario_(user);
+  return { ok: true, user: user };
+}
+
+function invalidarTokensDeUsuario_(username) {
+  const u = String(username || '').trim().toLowerCase();
+  if (!u) return;
+  escribirAuthHojaGenerica_('Tokens',
+    leerAuthHojaGenerica_('Tokens').filter(r => String(r.username || '').trim().toLowerCase() !== u)
+  );
+}
+
+function cambiarMiContrasena(passwordActual, passwordNueva) {
+  const actor = requireUsuario_();
+  asegurarUsuarios_();
+  const actual = String(passwordActual || '');
+  const nueva = String(passwordNueva || '');
+  if (!actual || !nueva) throw new Error('Debes indicar la contraseña actual y la nueva');
+  if (nueva.length < 8) throw new Error('La nueva contraseña debe tener mínimo 8 caracteres');
+  const rows = leerUsuariosAuth_();
+  const idx = rows.findIndex(u => String(u.username || '').trim().toLowerCase() === String(actor).toLowerCase());
+  if (idx < 0) throw new Error('Usuario no encontrado');
+  const user = rows[idx];
+  if (String(user.activo) === 'false') throw new Error('Usuario inactivo');
+  if (passwordHash_(actual, String(user.salt || '')) !== String(user.password_hash || '')) {
+    throw new Error('La contraseña actual no es correcta');
+  }
+  if (passwordHash_(nueva, String(user.salt || '')) === String(user.password_hash || '')) {
+    throw new Error('La nueva contraseña debe ser distinta de la actual');
+  }
+  rows[idx].salt = Utilities.getUuid().replace(/-/g, '');
+  rows[idx].password_hash = passwordHash_(nueva, rows[idx].salt);
+  escribirUsuariosAuth_(rows);
+  return { ok: true, user: actor };
+}
+
+// ───────── Spreadsheets (admin) ─────────
+
+function listarSpreadsheetsAdmin() {
+  requireAdmin_();
+  const sheets = leerSpreadsheets_();
+  const links = leerHojasUsuarios_();
+  return sheets.map(s => {
+    const vinculados = links.filter(l => String(l.spreadsheet_id) === String(s.spreadsheet_id));
+    return {
+      spreadsheet_id: String(s.spreadsheet_id),
+      nombre: String(s.nombre || ''),
+      descripcion: String(s.descripcion || ''),
+      fecha_alta: s.fecha_alta || '',
+      usuarios: vinculados.map(l => String(l.username))
+    };
+  });
+}
+
+function altaSpreadsheetAdmin(spreadsheetId, nombre, descripcion) {
+  requireAdmin_();
+  const id = String(spreadsheetId || '').trim();
+  const nom = String(nombre || '').trim();
+  if (!id) throw new Error('Indica el spreadsheet ID');
+  if (!nom) throw new Error('Indica un nombre');
+  if (!/^[a-zA-Z0-9_-]{20,}$/.test(id)) throw new Error('El ID no parece un spreadsheet ID de Google');
+  // Validación temprana.
+  try { SpreadsheetApp.openById(id); }
+  catch (e) { throw new Error('No se puede abrir el spreadsheet: ' + (e && e.message || e)); }
+  const filas = leerSpreadsheets_();
+  if (filas.some(s => String(s.spreadsheet_id) === id)) throw new Error('Ese spreadsheet ya está registrado');
+  filas.push({
+    spreadsheet_id: id,
+    nombre: nom,
+    descripcion: String(descripcion || '').trim(),
+    fecha_alta: isoAhora_()
+  });
+  escribirSpreadsheets_(filas);
+  return { ok: true, spreadsheet_id: id, nombre: nom };
+}
+
+function bajaSpreadsheetAdmin(spreadsheetId) {
+  requireAdmin_();
+  const id = String(spreadsheetId || '').trim();
+  if (!id) throw new Error('Indica el spreadsheet ID');
+  const sheets = leerSpreadsheets_();
+  if (!sheets.some(s => String(s.spreadsheet_id) === id)) throw new Error('Spreadsheet no registrado');
+  const links = leerHojasUsuarios_().filter(l => String(l.spreadsheet_id) !== id);
+  escribirHojasUsuarios_(links);
+  escribirSpreadsheets_(sheets.filter(s => String(s.spreadsheet_id) !== id));
+  return { ok: true };
+}
+
+function renombrarSpreadsheetAdmin(spreadsheetId, nombre) {
+  requireAdmin_();
+  const id = String(spreadsheetId || '').trim();
+  const nom = String(nombre || '').trim();
+  if (!id) throw new Error('Indica el spreadsheet ID');
+  if (!nom) throw new Error('Indica un nombre');
+  const sheets = leerSpreadsheets_();
+  const idx = sheets.findIndex(s => String(s.spreadsheet_id) === id);
+  if (idx === -1) throw new Error('Spreadsheet no registrado');
+  sheets[idx].nombre = nom;
+  escribirSpreadsheets_(sheets);
+  return { ok: true, spreadsheet_id: id, nombre: nom };
+}
+
+function listarVinculacionesAdmin() {
+  requireAdmin_();
+  const sheets = leerSpreadsheets_();
+  const porId = {};
+  sheets.forEach(s => { porId[String(s.spreadsheet_id)] = s; });
+  const users = leerUsuariosAuth_().map(u => String(u.username || '').trim()).filter(Boolean);
+  return users.map(username => {
+    const links = leerHojasUsuarios_().filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
+    return {
+      username: username,
+      hojas: links.map(l => ({
+        spreadsheet_id: String(l.spreadsheet_id),
+        nombre: (porId[String(l.spreadsheet_id)] || {}).nombre || '(sin nombre)',
+        por_defecto: String(l.por_defecto) === 'true' || l.por_defecto === true
+      }))
+    };
+  });
+}
+
+function vincularHojaUsuarioAdmin(username, spreadsheetId, porDefecto) {
+  requireAdmin_();
+  const user = String(username || '').trim();
+  const id = String(spreadsheetId || '').trim();
+  if (!user) throw new Error('Indica el usuario');
+  if (!id) throw new Error('Indica el spreadsheet ID');
+  if (!leerUsuariosAuth_().some(u => String(u.username || '').trim().toLowerCase() === user.toLowerCase())) {
+    throw new Error('Usuario no existe');
+  }
+  if (!leerSpreadsheets_().some(s => String(s.spreadsheet_id) === id)) {
+    throw new Error('Spreadsheet no registrado; primero añádelo en el directorio');
+  }
+  const quiereDefecto = porDefecto === true || porDefecto === 'true';
+  const links = leerHojasUsuarios_();
+  const existe = links.find(l =>
+    String(l.username || '').trim().toLowerCase() === user.toLowerCase() &&
+    String(l.spreadsheet_id) === id
+  );
+  if (existe) throw new Error('Ese usuario ya tiene vinculada esa hoja');
+  if (quiereDefecto) {
+    links.forEach(l => {
+      if (String(l.username || '').trim().toLowerCase() === user.toLowerCase()) l.por_defecto = false;
+    });
+  } else if (!links.some(l => String(l.username || '').trim().toLowerCase() === user.toLowerCase())) {
+    // Primera hoja del usuario → se marca por defecto automáticamente.
+    porDefecto = true;
+  }
+  links.push({
+    username: user,
+    spreadsheet_id: id,
+    por_defecto: porDefecto === true || porDefecto === 'true',
+    fecha_alta: isoAhora_()
+  });
+  escribirHojasUsuarios_(links);
+  // Pre-cargar las hojas en el spreadsheet destino si está vacío.
+  try { ensureUserSchema_(id); } catch (e) { /* best-effort */ }
+  return { ok: true, username: user, spreadsheet_id: id, por_defecto: porDefecto };
+}
+
+function desvincularHojaUsuarioAdmin(username, spreadsheetId) {
+  requireAdmin_();
+  const user = String(username || '').trim();
+  const id = String(spreadsheetId || '').trim();
+  if (!user || !id) throw new Error('Faltan parámetros');
+  const links = leerHojasUsuarios_();
+  const restantes = links.filter(l => !(
+    String(l.username || '').trim().toLowerCase() === user.toLowerCase() &&
+    String(l.spreadsheet_id) === id
+  ));
+  if (restantes.length === links.length) throw new Error('Vinculación no encontrada');
+  const eraDefecto = links.find(l =>
+    String(l.username || '').trim().toLowerCase() === user.toLowerCase() &&
+    String(l.spreadsheet_id) === id &&
+    (String(l.por_defecto) === 'true' || l.por_defecto === true)
+  );
+  escribirHojasUsuarios_(restantes);
+  if (eraDefecto) {
+    const otra = restantes.find(l => String(l.username || '').trim().toLowerCase() === user.toLowerCase());
+    if (otra) { otra.por_defecto = true; escribirHojasUsuarios_(restantes); }
+  }
+  return { ok: true };
+}
+
+function setHojaPorDefectoAdmin(username, spreadsheetId) {
+  requireAdmin_();
+  const user = String(username || '').trim();
+  const id = String(spreadsheetId || '').trim();
+  if (!user || !id) throw new Error('Faltan parámetros');
+  const links = leerHojasUsuarios_();
+  const target = links.find(l =>
+    String(l.username || '').trim().toLowerCase() === user.toLowerCase() &&
+    String(l.spreadsheet_id) === id
+  );
+  if (!target) throw new Error('El usuario no tiene vinculada esa hoja');
+  links.forEach(l => {
+    if (String(l.username || '').trim().toLowerCase() === user.toLowerCase()) l.por_defecto = false;
+  });
+  target.por_defecto = true;
+  escribirHojasUsuarios_(links);
+  return { ok: true };
+}
+
+function listarMisHojas() {
+  const username = requireUsuario_();
+  return listarHojasDelUsuario_(username);
+}
+
+function cambiarHojaActiva(spreadsheetId) {
+  const username = requireUsuario_();
+  const id = String(spreadsheetId || '').trim();
+  if (!id) throw new Error('Indica la hoja');
+  const links = leerHojasUsuarios_();
+  const existe = links.some(l =>
+    String(l.username || '').trim().toLowerCase() === username.toLowerCase() &&
+    String(l.spreadsheet_id) === id
+  );
+  if (!existe) throw new Error('No tienes vinculada esa hoja');
+  links.forEach(l => {
+    if (String(l.username || '').trim().toLowerCase() === username.toLowerCase()) l.por_defecto = false;
+  });
+  const target = links.find(l =>
+    String(l.username || '').trim().toLowerCase() === username.toLowerCase() &&
+    String(l.spreadsheet_id) === id
+  );
+  if (target) {
+    target.por_defecto = true;
+    escribirHojasUsuarios_(links);
+  }
+  _currentSheetId = id;
+  return { ok: true, hojaActivaId: id };
+}
+
+// ───────── Bootstrap ─────────
+
+function bootstrapBase() {
+  const owner = requireUsuario_();
+  asegurarUsuarios_();
+  const hojasUsuario = listarHojasDelUsuario_(owner);
+  const hojaActivaId = _currentSheetId || resolverHojaActivaId_(owner);
+
+  if (!hojasUsuario.length || !hojaActivaId) {
+    _currentSheetId = '';
+    return {
+      sesion: { user: owner, rol: currentRol_() || ROLES.BASICO },
+      version: APP_VERSION,
+      hojas: [],
+      hojaActivaId: '',
+      tasks: [],
+      labels: [],
+      entries: [],
+      activeTimer: null,
+      sin_hojas: true,
+      sin_datos: true
+    };
+  }
+
+  _currentSheetId = hojaActivaId;
+  ensureUserSchema_(hojaActivaId);
+  return {
+    sesion: { user: owner, rol: currentRol_() || ROLES.BASICO },
+    version: APP_VERSION,
+    hojas: hojasUsuario,
+    hojaActivaId: hojaActivaId,
+    tasks: getTasks(),
+    labels: getLabels(),
+    entries: getEntries(),
+    activeTimer: getActiveTimer()
+  };
+}
+
+function bootstrap() {
+  return bootstrapBase();
+}
+
+// ───────── Configuración inicial ─────────
+
+function ping() {
+  const ok = !!getMasterSpreadsheetId_();
+  return { ok: ok, version: APP_VERSION };
+}
+
+function configurarSpreadsheetMaestro(id) {
+  const limpio = String(id || '').trim();
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(limpio)) throw new Error('ID de spreadsheet inválido');
+  // Validación temprana: el script debe tener acceso de edición al spreadsheet.
+  SpreadsheetApp.openById(limpio);
+  setMasterSpreadsheetId_(limpio);
+  // Forzar lectura/seed del admin por defecto en el siguiente loginUsuario.
+  invalidarAuthCache_('Usuarios');
+  invalidarAuthCache_('Config');
+  return { ok: true, configurado: true };
+}
+
+// ───────── CRUD per-usuario (Tasks / Labels / TimeEntries) ─────────
+// Todas estas funciones leen/escriben en el spreadsheet del usuario activo
+// (ssActiva_()), no en el master.
+
+function uid_() { return Utilities.getUuid(); }
+function iso_() { return new Date().toISOString(); }
+
+function ensureUserSchema_(sheetId) {
+  const id = String(sheetId || _currentSheetId || '');
+  if (!id) throw new Error('No hay hoja activa');
+  const ss = SpreadsheetApp.openById(id);
   Object.entries(SHEETS).forEach(([name, headers]) => {
     let s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name);
@@ -36,12 +758,27 @@ function ensureSchema_() {
   });
 }
 
-function uid_() { return Utilities.getUuid(); }
-function iso_() { return new Date().toISOString(); }
-function toIso_(v) { return v instanceof Date ? v.toISOString() : (v || ''); }
+function ensureSchema_() {
+  // Compatibilidad con versiones anteriores que sólo tenían una hoja única.
+  // Si no hay _currentSheetId, cae al master (modo single-sheet).
+  if (!_currentSheetId) {
+    // Sin hoja activa: bootstrap asume master en single-sheet; crear las tablas allí.
+    const ss = authSs_();
+    Object.entries(SHEETS).forEach(([name, headers]) => {
+      let s = ss.getSheetByName(name);
+      if (!s) s = ss.insertSheet(name);
+      if (s.getLastRow() === 0) {
+        s.getRange(1, 1, 1, headers.length).setValues([headers]);
+        s.setFrozenRows(1);
+      }
+    });
+    return;
+  }
+  ensureUserSchema_(_currentSheetId);
+}
 
 function readRows_(name) {
-  const s = ss_().getSheetByName(name);
+  const s = ssActiva_().getSheetByName(name);
   if (!s || s.getLastRow() <= 1) return [];
   const values = s.getDataRange().getValues();
   const headers = values[0];
@@ -61,14 +798,14 @@ function readRows_(name) {
 }
 
 function appendRow_(name, obj) {
-  const s = ss_().getSheetByName(name);
+  const s = ssActiva_().getSheetByName(name);
   const headers = s.getDataRange().getValues()[0];
   const row = headers.map(h => obj[h] !== undefined ? obj[h] : '');
   s.appendRow(row);
 }
 
 function findRowNum_(name, id) {
-  const s = ss_().getSheetByName(name);
+  const s = ssActiva_().getSheetByName(name);
   if (!s || s.getLastRow() <= 1) return -1;
   const values = s.getDataRange().getValues();
   const idCol = values[0].indexOf('id');
@@ -79,7 +816,7 @@ function findRowNum_(name, id) {
 }
 
 function updateRow_(name, id, patch) {
-  const s = ss_().getSheetByName(name);
+  const s = ssActiva_().getSheetByName(name);
   const rowNum = findRowNum_(name, id);
   if (rowNum === -1) throw new Error(`${name} row not found: ${id}`);
   const headers = s.getDataRange().getValues()[0];
@@ -92,12 +829,12 @@ function updateRow_(name, id, patch) {
 }
 
 function deleteRow_(name, id) {
-  const s = ss_().getSheetByName(name);
+  const s = ssActiva_().getSheetByName(name);
   const rowNum = findRowNum_(name, id);
   if (rowNum > 0) s.deleteRow(rowNum);
 }
 
-// --- Bootstrap ---
+// --- Bootstrap data ---
 function getInitialData() {
   return {
     tasks:  readRows_('Tasks'),
@@ -180,7 +917,7 @@ function deleteEntry(id) {
 
 // ponytail: one-shot rebaser for entries stored under the buggy ISO parser — run from the editor with your local UTC offset (PDT = +7, UTC = 0)
 function rebaseEntries(offsetHours) {
-  const s = ss_().getSheetByName('TimeEntries');
+  const s = ssActiva_().getSheetByName('TimeEntries');
   if (!s || s.getLastRow() <= 1) return 'No entries';
   const offsetMs = offsetHours * 3600000;
   const data = s.getDataRange().getValues();
@@ -204,7 +941,7 @@ function rebaseEntries(offsetHours) {
   return `Rebased ${count} entr${count === 1 ? 'y' : 'ies'} by ${offsetHours}h`;
 }
 
-// --- Timer (per-user, per-script via UserProperties) ---
+// --- Timer (per-user via UserProperties) ---
 function getActiveTimer() {
   const raw = PropertiesService.getUserProperties().getProperty('activeTimer');
   if (!raw) return null;
@@ -213,7 +950,7 @@ function getActiveTimer() {
 
 // ponytail: diagnostics — run from the editor to inspect the sheet's raw state
 function dumpTimeEntries() {
-  const s = ss_().getSheetByName('TimeEntries');
+  const s = ssActiva_().getSheetByName('TimeEntries');
   if (!s) return 'No TimeEntries sheet';
   const data = s.getDataRange().getValues();
   return JSON.stringify({
@@ -226,7 +963,7 @@ function dumpTimeEntries() {
 }
 
 function resetTimeEntries() {
-  const s = ss_().getSheetByName('TimeEntries');
+  const s = ssActiva_().getSheetByName('TimeEntries');
   if (!s) return 'No TimeEntries sheet';
   if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   return 'Cleared all entries';
@@ -251,14 +988,25 @@ function stopTimer() {
 }
 
 // ───────── API dispatch ─────────
-// ponytail: the only public surface. doGet also routes `?action=ping` so smoke
-// tests don't need a POST. doPost is the actual data path.
+
 const API_ACTIONS = new Set([
+  'ping', 'authStatus', 'loginUsuario', 'logoutUsuario', 'configurarSpreadsheetMaestro',
+  'bootstrap', 'bootstrapBase',
+  'listarUsuariosAdmin', 'crearUsuarioAdmin', 'resetearContrasenaAdmin',
+  'cambiarRolUsuarioAdmin', 'eliminarUsuarioAdmin',
+  'listarSpreadsheetsAdmin', 'altaSpreadsheetAdmin', 'bajaSpreadsheetAdmin',
+  'renombrarSpreadsheetAdmin',
+  'listarVinculacionesAdmin', 'vincularHojaUsuarioAdmin',
+  'desvincularHojaUsuarioAdmin', 'setHojaPorDefectoAdmin',
+  'cambiarMiContrasena', 'listarMisHojas', 'cambiarHojaActiva',
   'getInitialData', 'getTasks', 'createTask', 'updateTask', 'deleteTask',
   'getLabels', 'createLabel', 'updateLabel', 'deleteLabel',
   'getEntries', 'createEntry', 'deleteEntry',
-  'getActiveTimer', 'startTimer', 'stopTimer',
-  'ping'
+  'getActiveTimer', 'startTimer', 'stopTimer'
+]);
+
+const API_PUBLIC_ACTIONS = new Set([
+  'ping', 'authStatus', 'loginUsuario', 'logoutUsuario', 'configurarSpreadsheetMaestro'
 ]);
 
 function jsonResponse_(payload) {
@@ -273,22 +1021,19 @@ function dispatchApi_(request) {
   if (!API_ACTIONS.has(action)) throw new Error('Acción no permitida: ' + action);
   const fn = globalThis[action];
   if (typeof fn !== 'function') throw new Error('Función no encontrada: ' + action);
-  return fn.apply(null, args);
-}
-
-function ping() {
-  return { ok: true, service: 'tasktime', version: 'ms-http-1' };
+  if (API_PUBLIC_ACTIONS.has(action)) return fn.apply(null, args);
+  return _authadmin(request.token, action, ...args);
 }
 
 function doGet(e) {
   const params = (e && e.parameter) || {};
   if (!params.action) {
-    return jsonResponse_({ ok: true, data: { service: 'tasktime', version: 'ms-http-1' } });
+    return jsonResponse_({ ok: true, data: { service: 'tasktime', version: APP_VERSION } });
   }
   try {
-    ensureSchema_();
     return jsonResponse_({ ok: true, data: dispatchApi_({
       action: params.action,
+      token: String(params.token || ''),
       args: params.args ? JSON.parse(params.args) : []
     }) });
   } catch (err) {
@@ -299,7 +1044,6 @@ function doGet(e) {
 function doPost(e) {
   try {
     const body = JSON.parse(e && e.postData && e.postData.contents || '{}');
-    ensureSchema_();
     return jsonResponse_({ ok: true, data: dispatchApi_(body) });
   } catch (err) {
     return jsonResponse_({ ok: false, error: String(err && err.message || err) });
