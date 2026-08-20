@@ -1,6 +1,9 @@
-// TaskTime — server.
-// Sheets: Tasks, Labels, TimeEntries (auto-created on first load).
+// TaskTime — server (Google Apps Script WebApp).
+// Storage: Google Sheets (Tasks, Labels, TimeEntries — auto-created on first load).
 // Active timer persisted via UserProperties (per-user, per-script).
+//
+// API surface: doGet / doPost dispatch via dispatchApi_(). Frontend calls
+// `call('action', ...args)` from a static page hosted elsewhere.
 
 const SHEETS = {
   Tasks:        ['id', 'name', 'labelId', 'createdAt'],
@@ -31,13 +34,6 @@ function ensureSchema_() {
       s.setFrozenRows(1);
     }
   });
-}
-
-function doGet() {
-  ensureSchema_();
-  return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('TaskTime')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function uid_() { return Utilities.getUuid(); }
@@ -252,4 +248,60 @@ function stopTimer() {
     source: 'timer'
   });
   return getEntries();
+}
+
+// ───────── API dispatch ─────────
+// ponytail: the only public surface. doGet also routes `?action=ping` so smoke
+// tests don't need a POST. doPost is the actual data path.
+const API_ACTIONS = new Set([
+  'getInitialData', 'getTasks', 'createTask', 'updateTask', 'deleteTask',
+  'getLabels', 'createLabel', 'updateLabel', 'deleteLabel',
+  'getEntries', 'createEntry', 'deleteEntry',
+  'getActiveTimer', 'startTimer', 'stopTimer',
+  'ping'
+]);
+
+function jsonResponse_(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function dispatchApi_(request) {
+  const action = String(request && request.action || '').trim();
+  const args = Array.isArray(request && request.args) ? request.args : [];
+  if (!action) throw new Error('Missing action');
+  if (!API_ACTIONS.has(action)) throw new Error('Acción no permitida: ' + action);
+  const fn = globalThis[action];
+  if (typeof fn !== 'function') throw new Error('Función no encontrada: ' + action);
+  return fn.apply(null, args);
+}
+
+function ping() {
+  return { ok: true, service: 'tasktime', version: 'ms-http-1' };
+}
+
+function doGet(e) {
+  const params = (e && e.parameter) || {};
+  if (!params.action) {
+    return jsonResponse_({ ok: true, data: { service: 'tasktime', version: 'ms-http-1' } });
+  }
+  try {
+    ensureSchema_();
+    return jsonResponse_({ ok: true, data: dispatchApi_({
+      action: params.action,
+      args: params.args ? JSON.parse(params.args) : []
+    }) });
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err && err.message || err) });
+  }
+}
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e && e.postData && e.postData.contents || '{}');
+    ensureSchema_();
+    return jsonResponse_({ ok: true, data: dispatchApi_(body) });
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err && err.message || err) });
+  }
 }
