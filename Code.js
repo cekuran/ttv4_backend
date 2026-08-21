@@ -35,6 +35,45 @@ const DEFAULT_ADMIN_PASSWORD = 'admin1234';
 
 const PALETTE = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','#FF6D00','#7B1FA2'];
 
+// ───────── Script Cache (CacheService) ─────────
+// Caché compartida entre ejecuciones del Web App. Reduce lecturas a Sheets en
+// el path caliente de cada request autenticada: validar token y resolver hoja
+// activa pasan de abrir el master spreadsheet a un CacheService.get.
+// Límites GAS: ~100 KB/entrada, TTL máx. 21600 s. Fallos de caché se ignoran.
+const CACHE_TTL_TOKEN_SEC = 30 * 60;       // 30 min — validación de sesión
+const CACHE_TTL_AUTH_SHEET_SEC = 5 * 60;   // 5 min — hojas del master sheet
+const CACHE_MAX_JSON_CHARS = 90000;        // margen bajo el límite ~100 KB
+
+function scriptCache_() { return CacheService.getScriptCache(); }
+
+function cachePutJson_(key, value, ttlSec) {
+  try {
+    const json = JSON.stringify(value);
+    if (!json || json.length > CACHE_MAX_JSON_CHARS) return false;
+    scriptCache_().put(key, json, Math.min(ttlSec || CACHE_TTL_AUTH_SHEET_SEC, 21600));
+    return true;
+  } catch (e) { return false; }
+}
+
+function cacheGetJson_(key) {
+  try {
+    const raw = scriptCache_().get(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+
+function cacheRemove_(key) {
+  try { scriptCache_().remove(key); } catch (e) { /* ignore */ }
+}
+
+// ponytail: payloads auth (Usuarios/Tokens/HojasUsuarios/Spreadsheets/Config) son
+// pequeños (<10 KB típicamente), gzip solo mete overhead. Si hojas auth crecen
+// hasta chocar con el límite de ~100 KB, añadir prefijo gzip como en
+// finanzasFamiliaMs (cacheSerialize_ / cacheDeserialize_ con Utilities.gzip).
+function tokenCacheKey_(token) { return 'tok:' + String(token || '').trim(); }
+function authSheetCacheKey_(nombre) { return 'auth:' + String(nombre || ''); }
+
 // ───────── Auth primitives ─────────
 
 function bytesHex_(bytes) {
@@ -175,10 +214,18 @@ function _authCacheKey_(nombre) { return nombre; }
 
 function leerAuthHojaGenerica_(nombre) {
   if (_authReadCache[_authCacheKey_(nombre)]) return cloneRows_(_authReadCache[_authCacheKey_(nombre)]);
+  // Cache entre requests: evita abrir el master spreadsheet en casi todas las
+  // llamadas autenticadas (Tokens, Usuarios, HojasUsuarios, Spreadsheets, Config).
+  const cached = cacheGetJson_(authSheetCacheKey_(nombre));
+  if (cached) {
+    _authReadCache[_authCacheKey_(nombre)] = cached;
+    return cloneRows_(cached);
+  }
   const h = asegurarAuthHojaGenerica_(nombre);
   const valores = h.getDataRange().getValues();
   if (valores.length < 2) {
     _authReadCache[_authCacheKey_(nombre)] = [];
+    cachePutJson_(authSheetCacheKey_(nombre), [], CACHE_TTL_AUTH_SHEET_SEC);
     return [];
   }
   const cab = valores[0];
@@ -188,6 +235,7 @@ function leerAuthHojaGenerica_(nombre) {
     return o;
   });
   _authReadCache[_authCacheKey_(nombre)] = rows;
+  cachePutJson_(authSheetCacheKey_(nombre), rows, CACHE_TTL_AUTH_SHEET_SEC);
   return cloneRows_(rows);
 }
 
@@ -200,6 +248,7 @@ function escribirAuthHojaGenerica_(nombre, filas) {
   if (matriz.length) h.getRange(1, 1, matriz.length, cab.length).setValues(matriz);
   h.setFrozenRows(1);
   _authReadCache[_authCacheKey_(nombre)] = cloneRows_(filasSafe);
+  cachePutJson_(authSheetCacheKey_(nombre), filasSafe, CACHE_TTL_AUTH_SHEET_SEC);
 }
 
 function cloneRows_(rows) {
@@ -207,7 +256,10 @@ function cloneRows_(rows) {
 }
 
 function invalidarAuthCache_(nombre) {
-  if (nombre) delete _authReadCache[_authCacheKey_(nombre)];
+  if (nombre) {
+    delete _authReadCache[_authCacheKey_(nombre)];
+    cacheRemove_(authSheetCacheKey_(nombre));
+  }
 }
 
 function leerUsuariosAuth_() {
@@ -282,20 +334,30 @@ function crearTokenSesion_(username) {
   const filas = leerAuthHojaGenerica_('Tokens');
   filas.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
   escribirAuthHojaGenerica_('Tokens', filas);
+  // Pre-rellenar caché para que la siguiente request valide sin abrir Sheets.
+  cachePutJson_(tokenCacheKey_(token), { u: usernameNorm }, CACHE_TTL_TOKEN_SEC);
   return token;
 }
 
 function validarTokenSesion_(token) {
   const t = String(token || '').trim();
   if (!t) return '';
+  // 1) Cache entre requests (token válido 30 min → evita leer la hoja Tokens).
+  const hit = cacheGetJson_(tokenCacheKey_(t));
+  if (hit && hit.u) return String(hit.u);
+  // 2) Fallback a la hoja (con caché de hoja + memoria de request).
   const fila = leerAuthHojaGenerica_('Tokens').find(r => String(r.token || '') === t);
   const username = fila ? String(fila.username || '').trim() : '';
+  if (username) cachePutJson_(tokenCacheKey_(t), { u: username }, CACHE_TTL_TOKEN_SEC);
   return username;
 }
 
 function invalidarTokenSesion_(token) {
   const t = String(token || '').trim();
   if (!t) return;
+  // Invalidar caché ANTES de reescribir para que un request concurrente no
+  // rehidrate el token revocado desde la hoja vieja todavía cacheada.
+  cacheRemove_(tokenCacheKey_(t));
   escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t));
 }
 
