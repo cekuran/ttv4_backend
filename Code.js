@@ -101,12 +101,9 @@ function isoAhora_() {
 // ───────── Spreadsheet access ─────────
 
 function getMasterSpreadsheetId_() {
-  // 1) Config del master sheet (clave en la propia hoja Config del master)
-  // 2) Script Property legacy SPREADSHEET_ID
-  try {
-    const cfg = obtenerConfig_(CONFIG_MASTER_SHEET_ID);
-    if (cfg) return cfg;
-  } catch (e) { /* master aún no existe */ }
+  // ping() llama a esto en cada arranque de página; leer Script Property es
+  // instantáneo y evita abrir el master spreadsheet (que puede estar inaccesible
+  // y bloquear `SpreadsheetApp.openById` durante minutos).
   return PropertiesService.getScriptProperties().getProperty(MASTER_PROP_KEY) || '';
 }
 
@@ -783,8 +780,10 @@ function bootstrap() {
 // ───────── Configuración inicial ─────────
 
 function ping() {
-  const ok = !!getMasterSpreadsheetId_();
-  return { ok: ok, version: APP_VERSION };
+  if (!getMasterSpreadsheetId_()) {
+    return { ok: true, configurado: false };
+  }
+  return { ok: true, configurado: true, version: APP_VERSION };
 }
 
 function configurarSpreadsheetMaestro(id, adminUsername, adminPassword) {
