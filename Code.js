@@ -15,7 +15,8 @@
 const SHEETS = {
   Tasks:        ['id', 'name', 'labelId', 'createdAt'],
   Labels:       ['id', 'name', 'color',   'createdAt'],
-  TimeEntries:  ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt']
+  TimeEntries:  ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
+  ActiveTimer:  ['taskId', 'startTime']
 };
 
 const AUTH_SCHEMA = {
@@ -1026,13 +1027,6 @@ function rebaseEntries(offsetHours) {
   return `Rebased ${count} entr${count === 1 ? 'y' : 'ies'} by ${offsetHours}h`;
 }
 
-// --- Timer (per-user via UserProperties) ---
-function getActiveTimer() {
-  const raw = PropertiesService.getUserProperties().getProperty('activeTimer');
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch (e) { return null; }
-}
-
 // ponytail: diagnostics — run from the editor to inspect the sheet's raw state
 function dumpTimeEntries() {
   const s = ssActiva_().getSheetByName('TimeEntries');
@@ -1053,16 +1047,31 @@ function resetTimeEntries() {
   if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   return 'Cleared all entries';
 }
+
+// --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
+// Hoja de una sola fila debajo del header: si existe, hay timer activo.
+function getActiveTimer() {
+  const s = ssActiva_().getSheetByName('ActiveTimer');
+  if (!s || s.getLastRow() < 2) return null;
+  const row = s.getRange(2, 1, 1, 2).getValues()[0];
+  if (!row[0]) return null;
+  return { taskId: String(row[0]), startTime: String(row[1]) };
+}
+
 function startTimer(taskId) {
   const t = { taskId, startTime: iso_() };
-  PropertiesService.getUserProperties().setProperty('activeTimer', JSON.stringify(t));
+  const s = ssActiva_().getSheetByName('ActiveTimer');
+  if (!s) throw new Error('ActiveTimer sheet missing; bootstrap first');
+  if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
+  s.getRange(2, 1, 1, 2).setValues([[t.taskId, t.startTime]]);
   return t;
 }
+
 function stopTimer() {
-  const raw = PropertiesService.getUserProperties().getProperty('activeTimer');
-  if (!raw) return null;
-  const timer = JSON.parse(raw);
-  PropertiesService.getUserProperties().deleteProperty('activeTimer');
+  const timer = getActiveTimer();
+  if (!timer) return null;
+  const s = ssActiva_().getSheetByName('ActiveTimer');
+  if (s && s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   createEntry({
     taskId: timer.taskId,
     startTime: timer.startTime,
