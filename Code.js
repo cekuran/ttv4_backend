@@ -937,6 +937,7 @@ function updateRow_(name, id, patch) {
   Object.keys(patch).forEach(k => {
     const col = headers.indexOf(k);
     if (col >= 0) row[col] = patch[k];
+    else throw new Error(`${name} no tiene la columna "${k}". Ejecuta bootstrap para migrar el esquema.`);
   });
   s.getRange(rowNum, 1, 1, headers.length).setValues([row]);
 }
