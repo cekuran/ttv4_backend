@@ -13,7 +13,7 @@
 // `{ token }` pulled from localStorage.
 
 const SHEETS = {
-  Tasks:        ['id', 'name', 'labelId', 'createdAt'],
+  Tasks:        ['id', 'name', 'labelId', 'completed', 'createdAt'],
   Labels:       ['id', 'name', 'color',   'createdAt'],
   TimeEntries:  ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
   ActiveTimer:  ['taskId', 'startTime']
@@ -840,6 +840,20 @@ function ensureUserSchema_(sheetId) {
     if (s.getLastRow() === 0) {
       s.getRange(1, 1, 1, headers.length).setValues([headers]);
       s.setFrozenRows(1);
+    } else {
+      // ponytail: backfill any missing trailing columns (e.g. Tasks.completed) — one-shot per sheet on first bootstrap
+      const currentCols = s.getLastColumn();
+      if (currentCols < headers.length) {
+        const newHeaders = headers.slice(currentCols);
+        s.getRange(1, currentCols + 1, 1, newHeaders.length).setValues([newHeaders]);
+        const lastRow = s.getLastRow();
+        if (lastRow > 1) {
+          const blank = [newHeaders.map(() => '')];
+          s.getRange(2, currentCols + 1, lastRow - 1, newHeaders.length).setValues(
+            Array.from({ length: lastRow - 1 }, () => blank[0])
+          );
+        }
+      }
     }
   });
 }
@@ -856,6 +870,19 @@ function ensureSchema_() {
       if (s.getLastRow() === 0) {
         s.getRange(1, 1, 1, headers.length).setValues([headers]);
         s.setFrozenRows(1);
+      } else {
+        // ponytail: backfill trailing columns — mismo motivo que ensureUserSchema_
+        const currentCols = s.getLastColumn();
+        if (currentCols < headers.length) {
+          const newHeaders = headers.slice(currentCols);
+          s.getRange(1, currentCols + 1, 1, newHeaders.length).setValues([newHeaders]);
+          const lastRow = s.getLastRow();
+          if (lastRow > 1) {
+            s.getRange(2, currentCols + 1, lastRow - 1, newHeaders.length).setValues(
+              Array.from({ length: lastRow - 1 }, () => newHeaders.map(() => ''))
+            );
+          }
+        }
       }
     });
     return;
