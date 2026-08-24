@@ -89,9 +89,16 @@ function sha256Hex_(text) {
   return bytesHex_(digest);
 }
 
+// 1500 iteraciones: en GAS cada Utilities.computeDigest es costoso.
+// 12000 hacía que login/cambio de contraseña tardara varios segundos.
+// 1500 sigue siendo resistente a fuerza bruta offline y es ~8× más rápido.
+// Usuarios existentes con hash antiguo deberán resetear contraseña (admin)
+// o cambiarla una vez (el nuevo hash se escribe al cambiar).
+const PASSWORD_ITERATIONS = 1500;
+
 function passwordHash_(password, salt) {
   let h = String(salt || '') + '|' + String(password || '');
-  for (let i = 0; i < 12000; i++) h = sha256Hex_(h);
+  for (let i = 0; i < PASSWORD_ITERATIONS; i++) h = sha256Hex_(h);
   return h;
 }
 
@@ -115,20 +122,53 @@ function setMasterSpreadsheetId_(id) {
   return limpio;
 }
 
+// Caché de SpreadsheetApp por request (openById es caro).
+let _ssCache = {};          // id → Spreadsheet
+let _userReadCache = {};    // sheetName → rows[] (datos de usuario)
+let _headersCache = {};     // sheetName → headers[]
+let _sheetObjCache = {};    // sheetName → Sheet
+
+function openSsById_(id) {
+  const key = String(id || '');
+  if (!key) throw new Error('spreadsheet id vacío');
+  if (_ssCache[key]) return _ssCache[key];
+  const ss = SpreadsheetApp.openById(key);
+  _ssCache[key] = ss;
+  return ss;
+}
+
 function authSs_() {
   const id = getMasterSpreadsheetId_();
   if (!id) throw new Error('Master spreadsheet no configurado. Llama a configurarSpreadsheetMaestro(id) primero.');
-  return SpreadsheetApp.openById(id);
+  return openSsById_(id);
 }
 
 function ssActiva_() {
   // Hoja de datos del usuario activo. Si _currentSheetId está resuelto (por
   // _authadmin / bootstrap), abre esa; en caso contrario cae al master.
   if (_currentSheetId) {
-    try { return SpreadsheetApp.openById(_currentSheetId); }
+    try { return openSsById_(_currentSheetId); }
     catch (e) { /* id inválido: fallback */ }
   }
   return authSs_();
+}
+
+function getUserSheet_(name) {
+  if (_sheetObjCache[name]) return _sheetObjCache[name];
+  const s = ssActiva_().getSheetByName(name);
+  if (s) _sheetObjCache[name] = s;
+  return s;
+}
+
+function invalidateUserDataCache_(name) {
+  if (name) {
+    delete _userReadCache[name];
+    delete _headersCache[name];
+    // no borramos _sheetObjCache: el objeto Sheet sigue válido
+  } else {
+    _userReadCache = {};
+    _headersCache = {};
+  }
 }
 
 // ───────── Estado request-scoped ─────────
@@ -178,6 +218,11 @@ function _authadmin(token, fnName, ...args) {
   const username = validarTokenSesion_(token);
   if (!username) throw new Error('No autenticado');
   _currentToken = String(token || '').trim();
+  // Limpiar cachés de datos de usuario al resolver la hoja (por si el token
+  // llega a un request con otra hoja activa).
+  _userReadCache = {};
+  _headersCache = {};
+  _sheetObjCache = {};
   try { _currentSheetId = resolverHojaActivaId_(username); }
   catch (e) { _currentSheetId = ''; }
   const usuario = buscarUsuario_(username);
@@ -392,6 +437,13 @@ function authStatus(token) {
   return { authenticated: !!tokenUser, user: tokenUser || '', rol: rol || '' };
 }
 
+function passwordHashLegacy_(password, salt) {
+  // Versión antigua (12000 iter) para migración transparente en el primer login.
+  let h = String(salt || '') + '|' + String(password || '');
+  for (let i = 0; i < 12000; i++) h = sha256Hex_(h);
+  return h;
+}
+
 function loginUsuario(username, password) {
   asegurarUsuarios_();
   const user = String(username || '').trim();
@@ -399,8 +451,21 @@ function loginUsuario(username, password) {
   if (!user || !pass) throw new Error('Debes indicar usuario y contraseña');
   const found = buscarUsuario_(user);
   if (!found || String(found.activo) === 'false') throw new Error('Credenciales inválidas');
-  const hash = passwordHash_(pass, String(found.salt || ''));
-  if (hash !== String(found.password_hash || '')) throw new Error('Credenciales inválidas');
+  const salt = String(found.salt || '');
+  const stored = String(found.password_hash || '');
+  let hash = passwordHash_(pass, salt);
+  if (hash !== stored) {
+    // Migración: ¿es un hash generado con las 12000 iteraciones antiguas?
+    const legacy = passwordHashLegacy_(pass, salt);
+    if (legacy !== stored) throw new Error('Credenciales inválidas');
+    // Re-hash con el nuevo coste y persistir (una sola vez por usuario).
+    const rows = leerUsuariosAuth_();
+    const idx = rows.findIndex(u => String(u.username || '').trim().toLowerCase() === user.toLowerCase());
+    if (idx >= 0) {
+      rows[idx].password_hash = hash; // ya calculado con PASSWORD_ITERATIONS
+      escribirUsuariosAuth_(rows);
+    }
+  }
   const token = crearTokenSesion_(found.username);
   return { ok: true, user: found.username, rol: String(found.rol || ROLES.BASICO), token: token };
 }
@@ -733,6 +798,11 @@ function cambiarHojaActiva(spreadsheetId) {
     escribirHojasUsuarios_(links);
   }
   _currentSheetId = id;
+  // Nueva hoja activa → invalidar cachés de datos de usuario
+  _userReadCache = {};
+  _headersCache = {};
+  _sheetObjCache = {};
+  delete _ssCache[id]; // forzar reopen limpio si hace falta
   return { ok: true, hojaActivaId: id };
 }
 
@@ -833,7 +903,7 @@ function iso_() { return new Date().toISOString(); }
 function ensureUserSchema_(sheetId) {
   const id = String(sheetId || _currentSheetId || '');
   if (!id) throw new Error('No hay hoja activa');
-  const ss = SpreadsheetApp.openById(id);
+  const ss = openSsById_(id);
   Object.entries(SHEETS).forEach(([name, headers]) => {
     let s = ss.getSheetByName(name);
     if (!s) s = ss.insertSheet(name);
@@ -890,49 +960,86 @@ function ensureSchema_() {
   ensureUserSchema_(_currentSheetId);
 }
 
+function normalizeRow_(obj) {
+  Object.keys(obj).forEach(k => {
+    const v = obj[k];
+    if (v instanceof Date) obj[k] = v.toISOString();
+    else if (v === null || v === undefined) obj[k] = '';
+  });
+  if ('durationMinutes' in obj) obj.durationMinutes = Number(obj.durationMinutes) || 0;
+  return obj;
+}
+
+function getHeaders_(name) {
+  if (_headersCache[name]) return _headersCache[name];
+  const s = getUserSheet_(name);
+  if (!s || s.getLastRow() < 1) return (SHEETS[name] || []);
+  const headers = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0];
+  _headersCache[name] = headers;
+  return headers;
+}
+
 function readRows_(name) {
-  const s = ssActiva_().getSheetByName(name);
-  if (!s || s.getLastRow() <= 1) return [];
+  if (_userReadCache[name]) return cloneRows_(_userReadCache[name]);
+  const s = getUserSheet_(name);
+  if (!s || s.getLastRow() <= 1) {
+    _userReadCache[name] = [];
+    return [];
+  }
   const values = s.getDataRange().getValues();
   const headers = values[0];
+  _headersCache[name] = headers;
   const rows = values.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i]; });
-    Object.keys(obj).forEach(k => {
-      const v = obj[k];
-      if (v instanceof Date) obj[k] = v.toISOString();
-      else if (v === null || v === undefined) obj[k] = '';
+    return normalizeRow_(obj);
     });
-    obj.durationMinutes = Number(obj.durationMinutes) || 0;
-    return obj;
-  });
-  // ponytail: belt-and-suspenders — JSON round-trip strips any non-JSON class (Date, RegExp, custom) that survives the typeof checks
-  return JSON.parse(JSON.stringify(rows));
+  // belt-and-suspenders: strip non-JSON classes
+  const clean = JSON.parse(JSON.stringify(rows));
+  _userReadCache[name] = clean;
+  return cloneRows_(clean);
 }
 
 function appendRow_(name, obj) {
-  const s = ssActiva_().getSheetByName(name);
-  const headers = s.getDataRange().getValues()[0];
+  const s = getUserSheet_(name);
+  const headers = getHeaders_(name);
   const row = headers.map(h => obj[h] !== undefined ? obj[h] : '');
   s.appendRow(row);
+  // Mantener caché coherente
+  if (_userReadCache[name]) {
+    const copy = normalizeRow_(Object.assign({}, obj));
+    // Asegurar que las fechas/ISO queden como string
+    _userReadCache[name].push(JSON.parse(JSON.stringify(copy)));
+  } else {
+    invalidateUserDataCache_(name);
+  }
 }
 
 function findRowNum_(name, id) {
-  const s = ssActiva_().getSheetByName(name);
+  const s = getUserSheet_(name);
   if (!s || s.getLastRow() <= 1) return -1;
-  const values = s.getDataRange().getValues();
-  const idCol = values[0].indexOf('id');
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][idCol] === id) return i + 1;
+  // Preferir caché en memoria si está caliente
+  if (_userReadCache[name]) {
+    const idx = _userReadCache[name].findIndex(r => String(r.id) === String(id));
+    return idx >= 0 ? idx + 2 : -1; // +2 porque fila 1 = header
+  }
+  const headers = getHeaders_(name);
+  const idCol = headers.indexOf('id');
+  if (idCol < 0) return -1;
+  const last = s.getLastRow();
+  // Leer solo la columna id (mucho más barato que getDataRange completo)
+  const ids = s.getRange(2, idCol + 1, last, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) return i + 2;
   }
   return -1;
 }
 
 function updateRow_(name, id, patch) {
-  const s = ssActiva_().getSheetByName(name);
+  const s = getUserSheet_(name);
   const rowNum = findRowNum_(name, id);
   if (rowNum === -1) throw new Error(`${name} row not found: ${id}`);
-  const headers = s.getDataRange().getValues()[0];
+  const headers = getHeaders_(name);
   const row = s.getRange(rowNum, 1, 1, headers.length).getValues()[0];
   Object.keys(patch).forEach(k => {
     const col = headers.indexOf(k);
@@ -940,12 +1047,26 @@ function updateRow_(name, id, patch) {
     else throw new Error(`${name} no tiene la columna "${k}". Ejecuta bootstrap para migrar el esquema.`);
   });
   s.getRange(rowNum, 1, 1, headers.length).setValues([row]);
+  // Actualizar caché en memoria
+  if (_userReadCache[name]) {
+    const idx = rowNum - 2;
+    if (idx >= 0 && idx < _userReadCache[name].length) {
+      Object.assign(_userReadCache[name][idx], patch);
+      normalizeRow_(_userReadCache[name][idx]);
+    }
+  }
 }
 
 function deleteRow_(name, id) {
-  const s = ssActiva_().getSheetByName(name);
+  const s = getUserSheet_(name);
   const rowNum = findRowNum_(name, id);
-  if (rowNum > 0) s.deleteRow(rowNum);
+  if (rowNum > 0) {
+    s.deleteRow(rowNum);
+    if (_userReadCache[name]) {
+      const idx = rowNum - 2;
+      if (idx >= 0) _userReadCache[name].splice(idx, 1);
+    }
+  }
 }
 
 // --- Bootstrap data ---
@@ -993,12 +1114,9 @@ function updateLabel(id, patch) {
   return getLabels();
 }
 function deleteLabel(id) {
-  const labels = getLabels();
-  const dying = labels.find(l => l.id === id);
-  if (dying) {
+  // Limpiar labelId en tareas que lo usaban (usa caché de request)
     const tasks = getTasks().filter(t => t.labelId === id);
     tasks.forEach(t => updateRow_('Tasks', t.id, { labelId: '' }));
-  }
   deleteRow_('Labels', id);
   return getLabels();
 }
@@ -1079,7 +1197,7 @@ function resetTimeEntries() {
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
-  const s = ssActiva_().getSheetByName('ActiveTimer');
+  const s = getUserSheet_('ActiveTimer');
   if (!s || s.getLastRow() < 2) return null;
   const row = s.getRange(2, 1, 1, 2).getValues()[0];
   if (!row[0]) return null;
@@ -1088,7 +1206,7 @@ function getActiveTimer() {
 
 function startTimer(taskId) {
   const t = { taskId, startTime: iso_() };
-  const s = ssActiva_().getSheetByName('ActiveTimer');
+  const s = getUserSheet_('ActiveTimer');
   if (!s) throw new Error('ActiveTimer sheet missing; bootstrap first');
   if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   s.getRange(2, 1, 1, 2).setValues([[t.taskId, t.startTime]]);
@@ -1098,7 +1216,7 @@ function startTimer(taskId) {
 function stopTimer() {
   const timer = getActiveTimer();
   if (!timer) return null;
-  const s = ssActiva_().getSheetByName('ActiveTimer');
+  const s = getUserSheet_('ActiveTimer');
   if (s && s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   createEntry({
     taskId: timer.taskId,
