@@ -1281,6 +1281,22 @@ function periodKeyLocal_(period, when) {
   return `${year}-W${p(wk)}`;
 }
 
+// ponytail: Sheets coacciona strings como "2026-08-25" (daily) o "2026-08" (monthly) a
+// celdas de fecha, y al releerlas readRows_ las devuelve como Date -> ISO. Eso rompe la
+// comparación de periodKey (la UI nunca marca y toggleRoutineCompletion duplica filas).
+// Este helper reduce cualquier valor almacenado al formato canónico del periodo.
+function normalizeStoredPeriodKey_(value, period) {
+  if (value == null) return '';
+  let s = String(value).trim();
+  if (!s) return '';
+  // Si viene como ISO datetime (celda coaccionada a fecha), quédate con la parte de fecha.
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+  if (iso) s = `${iso[1]}-${iso[2]}-${iso[3]}`;
+  if (period === 'daily')   return s.slice(0, 10);   // YYYY-MM-DD
+  if (period === 'monthly') return s.slice(0, 7);    // YYYY-MM
+  return s;                                          // weekly: YYYY-Www (no se coacciona)
+}
+
 function getRoutines() { return readRows_('Routines'); }
 function createRoutine(name, period, labelId) {
   const p = String(period || '').trim();
@@ -1344,9 +1360,20 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
   const sheet = getUserSheet_(sheetName);
   if (!sheet) throw new Error(sheetName + ' no existe; ejecuta bootstrap primero');
 
-  const rows = readRows_(sheetName);
+  // ponytail: normalizamos el periodKey de cada fila (Sheets pudo coaccionar "2026-08-25"/
+  // "2026-08" a fecha al escribirlos) y colapsamos por periodo. Así el findIndex vuelve a
+  // acertar, y si ya había filas duplicadas para el mismo periodo se funden en una sola.
+  const byKey = new Map();
+  readRows_(sheetName).forEach(r => {
+    const key = normalizeStoredPeriodKey_(r.periodKey, p);
+    if (!key) return;
+    if (!byKey.has(key)) byKey.set(key, new Set());
+    const set = byKey.get(key);
+    String(r.ids || '').split(',').filter(Boolean).forEach(id => set.add(id));
+  });
+  const rows = Array.from(byKey.entries()).map(([periodKey, set]) => ({ periodKey, ids: Array.from(set).join(',') }));
   const target = String(routineId);
-  const idx = rows.findIndex(r => String(r.periodKey) === k);
+  const idx = rows.findIndex(r => r.periodKey === k);
 
   let nextRows;
   if (idx >= 0) {
@@ -1364,7 +1391,12 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
     if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
   } else {
     const matriz = [headers].concat(nextRows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
-    sheet.getRange(1, 1, matriz.length, headers.length).setValues(matriz);
+    const destino = sheet.getRange(1, 1, matriz.length, headers.length);
+    // ponytail: forzamos formato de texto ANTES de escribir para que Sheets NO convierta el
+    // periodKey ("2026-08-25", "2026-08") a fecha; si no, al releer vuelve como Date y rompe
+    // la comparación (la UI nunca marca y se insertan filas duplicadas para el mismo periodo).
+    destino.setNumberFormat('@');
+    destino.setValues(matriz);
     // ponytail: setValues sólo rellena hasta matriz.length; las filas sobrantes quedan huérfanas
     // y la siguiente lectura las devuelve, así que el "uncheck" reaparece como checked.
     if (sheet.getLastRow() > matriz.length) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
@@ -1388,8 +1420,9 @@ function getRoutineStatus() {
   const doneByPeriod = {};
   Object.keys(idsByPeriod).forEach(p => {
     doneByPeriod[p] = new Set();
+    const wanted = p === 'daily' ? keyToday : p === 'weekly' ? keyWeek : keyMonth;
     idsByPeriod[p].forEach(row => {
-      if (String(row.periodKey) === (p === 'daily' ? keyToday : p === 'weekly' ? keyWeek : keyMonth)) {
+      if (normalizeStoredPeriodKey_(row.periodKey, p) === wanted) {
         String(row.ids || '').split(',').filter(Boolean).forEach(id => doneByPeriod[p].add(id));
       }
     });
