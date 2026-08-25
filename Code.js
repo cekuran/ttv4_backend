@@ -1439,21 +1439,20 @@ function getRoutineStatus() {
   return { today: build('daily'), week: build('weekly'), month: build('monthly') };
 }
 
-// ponytail: para el panel semanal del dashboard necesitamos, por cada rutina diaria, qué días
-// de la semana ISO actual (L..D) están marcados. DailyCompletions guarda una fila por día
-// completada (periodKey=yyyy-mm-dd, ids=r1,r2,...), así que sólo tenemos que barrer la semana
-// y mirar membership. Devolvemos days[Mon..Sun] + count para que la UI no recalcule fechas.
-function getDailyRoutineWeekStatus() {
+// ponytail: panel semanal del dashboard + grid N-días de Recurrentes comparten endpoint.
+// daysBack = ventana hacia atrás desde HOY (incluido). Default 7 (semana actual) para el dashboard;
+// el panel de Recurrentes pide 14 (semana actual + anterior) para poder marcar días pasados.
+// Devolvemos days:[{date, completed}] (no bools) para que el cliente tenga la fecha exacta
+// y pueda mandar el periodKey al toggle sin recalcular nada.
+function getDailyRoutineWeekStatus(daysBack) {
   const routines = readRows_('Routines').filter(r => String(r.period) === 'daily');
-  // ponytail: la semana ISO va de Lunes(0) a Domingo(6) — el offset `+6)%7` ya se usa en cliente.
+  const n = Math.max(1, Math.min(60, Number(daysBack) || 7));
   const ref = new Date();
-  const monday = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - ((ref.getDay() + 6) % 7));
-  const days = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(monday); d.setDate(monday.getDate() + i);
-    days.push(periodKeyLocal_('daily', d));
+  const dayKeys = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - i);
+    dayKeys.push(periodKeyLocal_('daily', d));
   }
-  // index por periodKey -> Set(ids)
   const byKey = new Map();
   readRows_('DailyCompletions').forEach(r => {
     const k = normalizeStoredPeriodKey_(r.periodKey, 'daily');
@@ -1462,8 +1461,9 @@ function getDailyRoutineWeekStatus() {
     String(r.ids || '').split(',').filter(Boolean).forEach(id => byKey.get(k).add(id));
   });
   return routines.map(r => {
-    const mask = days.map(k => byKey.has(k) && byKey.get(k).has(String(r.id)));
-    return { id: String(r.id), name: r.name, days: mask, count: mask.filter(Boolean).length };
+    const target = String(r.id);
+    const days = dayKeys.map(k => ({ date: k, completed: byKey.has(k) && byKey.get(k).has(target) }));
+    return { id: target, name: r.name, days, count: days.filter(d => d.completed).length };
   });
 }
 
