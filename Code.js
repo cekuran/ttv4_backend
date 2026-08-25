@@ -13,10 +13,15 @@
 // `{ token }` pulled from localStorage.
 
 const SHEETS = {
-  Tasks:        ['id', 'name', 'labelId', 'completed', 'createdAt'],
-  Labels:       ['id', 'name', 'color',   'createdAt'],
-  TimeEntries:  ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
-  ActiveTimer:  ['taskId', 'startTime']
+  Tasks:              ['id', 'name', 'labelId', 'completed', 'createdAt'],
+  Labels:             ['id', 'name', 'color',   'createdAt'],
+  TimeEntries:        ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
+  ActiveTimer:        ['taskId', 'startTime'],
+  // ponytail: rutinas son tablas separadas de Tasks — el usuario quiere que las standard
+  // sean distintas de las rutinarias. Routines define el "qué se repite", RoutineCompletions
+  // registra cuándo se marcó. periodKey es la clave natural del periodo (yyyy-mm-dd / yyyy-Www / yyyy-mm).
+  Routines:           ['id', 'name', 'period', 'createdAt'],
+  RoutineCompletions: ['id', 'routineId', 'period', 'periodKey', 'completedAt']
 };
 
 const AUTH_SCHEMA = {
@@ -1194,6 +1199,133 @@ function resetTimeEntries() {
   return 'Cleared all entries';
 }
 
+// --- Routines (per-user) ---
+// ponytail: una rutina es SOLO un nombre + periodo (daily/weekly/monthly). El check de cada
+// periodo vive en RoutineCompletions, así no necesitamos regenerar la lista cada día/semana/mes.
+// La clave natural del periodo se computa en el cliente (yyyy-mm-dd / yyyy-Www / yyyy-mm) para
+// que coincida exactamente con la "fecha local" del usuario.
+const ROUTINE_PERIODS = new Set(['daily', 'weekly', 'monthly']);
+
+function periodKeyLocal_(period, when) {
+  const d = when ? new Date(when) : new Date();
+  const p = n => String(n).padStart(2, '0');
+  if (period === 'daily')  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  if (period === 'monthly') return `${d.getFullYear()}-${p(d.getMonth()+1)}`;
+  // weekly: ISO week (YYYY-Www). Coincide con el formato que ya usa Stats.
+  const thu = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  thu.setDate(d.getDate() + 4 - ((d.getDay() + 6) % 7));
+  const year = thu.getFullYear();
+  const jan4 = new Date(year, 0, 4);
+  const monW1 = new Date(jan4); monW1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+  const wk = 1 + Math.round((thu - monW1) / (7 * 86400000));
+  return `${year}-W${p(wk)}`;
+}
+
+function getRoutines() { return readRows_('Routines'); }
+function createRoutine(name, period) {
+  const p = String(period || '').trim();
+  if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido (daily|weekly|monthly)');
+  const n = String(name || '').trim();
+  if (!n) throw new Error('Indica un nombre');
+  appendRow_('Routines', { id: uid_(), name: n, period: p, createdAt: iso_() });
+  return getRoutines();
+}
+function updateRoutine(id, patch) {
+  if ('name' in patch) patch.name = String(patch.name || '').trim();
+  if ('period' in patch) {
+    const p = String(patch.period || '').trim();
+    if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
+    patch.period = p;
+  }
+  updateRow_('Routines', id, patch);
+  return getRoutines();
+}
+function deleteRoutine(id) {
+  deleteRow_('Routines', id);
+  // Limpieza best-effort de completions huérfanas (no falla si el sheet aún no existe)
+  try {
+    const rows = readRows_('RoutineCompletions').filter(r => String(r.routineId) !== String(id));
+    const sheet = getUserSheet_('RoutineCompletions');
+    if (sheet) {
+      if (rows.length === 0) {
+        if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+      } else {
+        const headers = getHeaders_('RoutineCompletions');
+        const matriz = [headers].concat(rows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
+        sheet.getRange(1, 1, matriz.length, headers.length).setValues(matriz);
+        if (matriz.length < sheet.getLastRow()) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
+      }
+      invalidateUserDataCache_('RoutineCompletions');
+    }
+  } catch (e) { /* best-effort */ }
+  return getRoutines();
+}
+
+function getRoutineCompletions() { return readRows_('RoutineCompletions'); }
+
+function toggleRoutineCompletion(routineId, period, periodKey) {
+  // El frontend manda el periodKey concreto (today / this week / this month). Si ya existe
+  // una completion para ese (routine, period, periodKey), la quitamos; si no, la creamos.
+  // Devuelve el status actualizado de hoy/esta semana/este mes para refrescar el dashboard
+  // sin una segunda llamada.
+  const routine = readRows_('Routines').find(r => String(r.id) === String(routineId));
+  if (!routine) throw new Error('Rutina no encontrada');
+  const p = String(period || '').trim();
+  const k = String(periodKey || '').trim();
+  if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
+  if (!k) throw new Error('PeriodKey requerido');
+
+  const rows = readRows_('RoutineCompletions');
+  const idx = rows.findIndex(r =>
+    String(r.routineId) === String(routineId) &&
+    String(r.period) === p &&
+    String(r.periodKey) === k
+  );
+  if (idx >= 0) {
+    rows.splice(idx, 1);
+    const sheet = getUserSheet_('RoutineCompletions');
+    if (sheet) {
+      const headers = getHeaders_('RoutineCompletions');
+      if (rows.length === 0) {
+        if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+      } else {
+        const matriz = [headers].concat(rows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
+        sheet.getRange(1, 1, matriz.length, headers.length).setValues(matriz);
+      }
+      invalidateUserDataCache_('RoutineCompletions');
+    }
+  } else {
+    appendRow_('RoutineCompletions', {
+      id: uid_(), routineId: routineId, period: p, periodKey: k, completedAt: iso_()
+    });
+  }
+  return getRoutineStatus();
+}
+
+function getRoutineStatus() {
+  // Devuelve para cada periodo (today/this week/this month): todas las rutinas del periodo
+  // con un flag completed según haya o no una completion con el periodKey actual.
+  const routines = readRows_('Routines');
+  const completions = readRows_('RoutineCompletions');
+  const keyToday = periodKeyLocal_('daily');
+  const keyWeek  = periodKeyLocal_('weekly');
+  const keyMonth = periodKeyLocal_('monthly');
+  const doneSet = new Set(
+    completions.map(c => `${String(c.routineId)}|${String(c.period)}|${String(c.periodKey)}`)
+  );
+  const build = period => {
+    const key = period === 'daily' ? keyToday : period === 'weekly' ? keyWeek : keyMonth;
+    return routines
+      .filter(r => String(r.period) === period)
+      .map(r => ({
+        routine: r,
+        periodKey: key,
+        completed: doneSet.has(`${String(r.id)}|${period}|${key}`)
+      }));
+  };
+  return { today: build('daily'), week: build('weekly'), month: build('monthly') };
+}
+
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
@@ -1242,7 +1374,9 @@ const API_ACTIONS = new Set([
   'getInitialData', 'getTasks', 'createTask', 'updateTask', 'deleteTask',
   'getLabels', 'createLabel', 'updateLabel', 'deleteLabel',
   'getEntries', 'createEntry', 'deleteEntry',
-  'getActiveTimer', 'startTimer', 'stopTimer'
+  'getActiveTimer', 'startTimer', 'stopTimer',
+  'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
+  'getRoutineCompletions', 'toggleRoutineCompletion', 'getRoutineStatus'
 ]);
 
 const API_PUBLIC_ACTIONS = new Set([
