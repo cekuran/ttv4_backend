@@ -1292,6 +1292,9 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
       } else {
         const matriz = [headers].concat(rows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
         sheet.getRange(1, 1, matriz.length, headers.length).setValues(matriz);
+        // ponytail: setValues sólo rellena hasta matriz.length; las filas sobrantes quedan huérfanas
+        // y la siguiente lectura las devuelve, así que el "uncheck" reaparece como checked.
+        if (sheet.getLastRow() > matriz.length) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
       }
       invalidateUserDataCache_('RoutineCompletions');
     }
