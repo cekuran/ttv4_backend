@@ -1334,7 +1334,7 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
   // viven en tres hojas (una por periodo) con shape [periodKey, ids]. Si routineId ya está
   // en la lista de ese periodKey, lo quitamos; si no, lo añadimos.
   const routine = readRows_('Routines').find(r => String(r.id) === String(routineId));
-  if (!routine) throw new Error('Rutina no encontrada');
+  if (!routine) throw new Error('Tarea recurrente no encontrada');
   const p = String(period || '').trim();
   const k = String(periodKey || '').trim();
   if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
