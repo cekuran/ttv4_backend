@@ -1440,14 +1440,18 @@ function getRoutineStatus() {
 }
 
 // ponytail: panel semanal del dashboard + grid N-días de Recurrentes comparten endpoint.
-// daysBack = ventana hacia atrás desde HOY (incluido). Default 7 (semana actual) para el dashboard;
-// el panel de Recurrentes pide 14 (semana actual + anterior) para poder marcar días pasados.
-// Devolvemos days:[{date, completed}] (no bools) para que el cliente tenga la fecha exacta
-// y pueda mandar el periodKey al toggle sin recalcular nada.
-function getDailyRoutineWeekStatus(daysBack) {
+// daysBack = ventana en días terminando en el ref (incluido). Default 7 (semana actual).
+// weeksBack = cuántas semanas se retrocede desde HOY antes de aplicar la ventana
+// (clamp 0..52). Permite que la vista de Recurrentes navegue entre semanas sin pedir
+// más datos cada vez — siempre leemos la misma hoja DailyCompletions, sólo cambiamos
+// la ventana temporal. Devolvemos days:[{date, completed}] (no bools) para que el cliente
+// tenga la fecha exacta de cada celda y pueda mandar el periodKey al toggle.
+function getDailyRoutineWeekStatus(daysBack, weeksBack) {
   const routines = readRows_('Routines').filter(r => String(r.period) === 'daily');
   const n = Math.max(1, Math.min(60, Number(daysBack) || 7));
+  const wb = Math.max(0, Math.min(52, Number(weeksBack) || 0));
   const ref = new Date();
+  ref.setDate(ref.getDate() - wb * 7);
   const dayKeys = [];
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - i);
