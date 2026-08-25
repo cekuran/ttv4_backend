@@ -1439,6 +1439,34 @@ function getRoutineStatus() {
   return { today: build('daily'), week: build('weekly'), month: build('monthly') };
 }
 
+// ponytail: para el panel semanal del dashboard necesitamos, por cada rutina diaria, qué días
+// de la semana ISO actual (L..D) están marcados. DailyCompletions guarda una fila por día
+// completada (periodKey=yyyy-mm-dd, ids=r1,r2,...), así que sólo tenemos que barrer la semana
+// y mirar membership. Devolvemos days[Mon..Sun] + count para que la UI no recalcule fechas.
+function getDailyRoutineWeekStatus() {
+  const routines = readRows_('Routines').filter(r => String(r.period) === 'daily');
+  // ponytail: la semana ISO va de Lunes(0) a Domingo(6) — el offset `+6)%7` ya se usa en cliente.
+  const ref = new Date();
+  const monday = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - ((ref.getDay() + 6) % 7));
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday); d.setDate(monday.getDate() + i);
+    days.push(periodKeyLocal_('daily', d));
+  }
+  // index por periodKey -> Set(ids)
+  const byKey = new Map();
+  readRows_('DailyCompletions').forEach(r => {
+    const k = normalizeStoredPeriodKey_(r.periodKey, 'daily');
+    if (!k) return;
+    if (!byKey.has(k)) byKey.set(k, new Set());
+    String(r.ids || '').split(',').filter(Boolean).forEach(id => byKey.get(k).add(id));
+  });
+  return routines.map(r => {
+    const mask = days.map(k => byKey.has(k) && byKey.get(k).has(String(r.id)));
+    return { id: String(r.id), name: r.name, days: mask, count: mask.filter(Boolean).length };
+  });
+}
+
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
@@ -1489,7 +1517,7 @@ const API_ACTIONS = new Set([
   'getEntries', 'createEntry', 'deleteEntry',
   'getActiveTimer', 'startTimer', 'stopTimer',
   'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
-  'toggleRoutineCompletion', 'getRoutineStatus'
+  'toggleRoutineCompletion', 'getRoutineStatus', 'getDailyRoutineWeekStatus'
 ]);
 
 const API_PUBLIC_ACTIONS = new Set([
