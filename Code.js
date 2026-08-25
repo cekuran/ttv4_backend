@@ -1298,12 +1298,12 @@ function normalizeStoredPeriodKey_(value, period) {
 }
 
 function getRoutines() { return readRows_('Routines'); }
-function createRoutine(name, period, labelId) {
+function createRoutine(name, period) {
   const p = String(period || '').trim();
   if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido (daily|weekly|monthly)');
   const n = String(name || '').trim();
   if (!n) throw new Error('Indica un nombre');
-  appendRow_('Routines', { id: uid_(), name: n, period: p, labelId: labelId || '', createdAt: iso_() });
+  appendRow_('Routines', { id: uid_(), name: n, period: p, createdAt: iso_() });
   return getRoutines();
 }
 function updateRoutine(id, patch) {
@@ -1313,7 +1313,6 @@ function updateRoutine(id, patch) {
     if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
     patch.period = p;
   }
-  if ('labelId' in patch) patch.labelId = patch.labelId || '';
   updateRow_('Routines', id, patch);
   return getRoutines();
 }
