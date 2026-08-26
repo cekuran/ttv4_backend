@@ -833,6 +833,9 @@ function bootstrapBase() {
       labels: [],
       entries: [],
       activeTimer: null,
+      routines: [],
+      routineStatus: { today: [], week: [], month: [] },
+      routineWeek: [],
       sin_hojas: true,
       sin_datos: true
     };
@@ -840,6 +843,9 @@ function bootstrapBase() {
 
   _currentSheetId = hojaActivaId;
   ensureUserSchema_(hojaActivaId);
+  // ponytail: el frontend solía disparar getRoutines + getRoutineStatus + getDailyRoutineWeekStatus
+  // tras bootstrap — 3 round-trips extra en el cold-start (cada uno puede ser 30s en primer hit).
+  // Ahora los devolvemos aquí, en la misma ejecución de Apps Script: 8 readRows_ pero 1 viaje.
   return {
     sesion: { user: owner, rol: currentRol_() || ROLES.BASICO },
     version: APP_VERSION,
@@ -848,7 +854,10 @@ function bootstrapBase() {
     tasks: getTasks(),
     labels: getLabels(),
     entries: getEntries(),
-    activeTimer: getActiveTimer()
+    activeTimer: getActiveTimer(),
+    routines: readRows_('Routines'),
+    routineStatus: getRoutineStatus(),
+    routineWeek: getDailyRoutineWeekStatus(7, 0)
   };
 }
 
@@ -1408,7 +1417,16 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
     if (sheet.getLastRow() > matriz.length) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
   }
   invalidateUserDataCache_(sheetName);
-  return getRoutineStatus();
+  // ponytail: el frontend ya hace optimistic update + sólo necesita saber el estado canónico
+  // del (routine, periodKey) que acaba de tocar. Devolver getRoutineStatus() costaba 3 readRows_
+  // extra por toggle (Routines + WeeklyCompletions + MonthlyCompletions siempre, Daily a veces).
+  // Aquí ya leí­mos la fila del día/periodo tocado — sabemos el resultado sin volver a leer.
+  return {
+    routineId: target,
+    period: p,
+    periodKey: k,
+    completed: nextRows[idx >= 0 ? idx : nextRows.length - 1].ids.split(',').filter(String).indexOf(target) >= 0
+  };
 }
 
 function getRoutineStatus() {
