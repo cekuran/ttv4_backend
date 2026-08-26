@@ -1440,21 +1440,22 @@ function getRoutineStatus() {
 }
 
 // ponytail: panel semanal del dashboard + grid N-días de Recurrentes comparten endpoint.
-// daysBack = ventana en días terminando en el ref (incluido). Default 7 (semana actual).
-// weeksBack = cuántas semanas se retrocede desde HOY antes de aplicar la ventana
-// (clamp 0..52). Permite que la vista de Recurrentes navegue entre semanas sin pedir
-// más datos cada vez — siempre leemos la misma hoja DailyCompletions, sólo cambiamos
-// la ventana temporal. Devolvemos days:[{date, completed}] (no bools) para que el cliente
-// tenga la fecha exacta de cada celda y pueda mandar el periodKey al toggle.
+// weeksBack = cuántas semanas ISO hacia atrás desde HOY (clamp 0..52).
+// n = nº de días desde el LUNES de esa semana. SIEMPRE devolvemos la semana completa
+// (Mon..Sun), NO una ventana deslizante de "últimos N días" — antes hacía que el frontend
+// recibiera un bloque Thu..Wed y mapease Wed→domingo porque asumía Mon=índice 0.
+// El frontend usa DOW_LABELS_SHORT con lunes=0, así que necesitamos alinear Mon..Sun.
 function getDailyRoutineWeekStatus(daysBack, weeksBack) {
   const routines = readRows_('Routines').filter(r => String(r.period) === 'daily');
   const n = Math.max(1, Math.min(60, Number(daysBack) || 7));
   const wb = Math.max(0, Math.min(52, Number(weeksBack) || 0));
   const ref = new Date();
   ref.setDate(ref.getDate() - wb * 7);
+  // lunes ISO de la semana que contiene ref (lunes=0). Mismo cálculo que usa el cliente.
+  const monday = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - ((ref.getDay() + 6) % 7));
   const dayKeys = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - i);
+  for (let i = 0; i < n; i++) {
+    const d = new Date(monday); d.setDate(monday.getDate() + i);
     dayKeys.push(periodKeyLocal_('daily', d));
   }
   const byKey = new Map();
