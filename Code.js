@@ -1303,6 +1303,13 @@ function createRoutine(name, period) {
   if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido (daily|weekly|monthly)');
   const n = String(name || '').trim();
   if (!n) throw new Error('Indica un nombre');
+  // ponytail: dedupe (name, period) — mismo nombre + mismo periodo = mismo concepto, no se duplica.
+  // Si el usuario quiere una variante ("Ejercicio AM" vs "Ejercicio PM") que cambie el nombre.
+  const dup = readRows_('Routines').some(r =>
+    String(r.period || '').trim() === p &&
+    String(r.name || '').trim().toLowerCase() === n.toLowerCase()
+  );
+  if (dup) throw new Error('Ya existe una tarea recurrente con ese nombre en ese periodo');
   appendRow_('Routines', { id: uid_(), name: n, period: p, createdAt: iso_() });
   return getRoutines();
 }
