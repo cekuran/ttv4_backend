@@ -379,12 +379,27 @@ function guardarConfig_(clave, valor) {
 
 // ───────── Sesión ─────────
 
+// ponytail: TTL de sesión. Sin esto los tokens viven para siempre: la hoja Tokens
+// crece en cada login y nadie la limpia salvo logout explícito o borrado de usuario,
+// así que validarTokenSesion_ (cache miss) escanea una hoja cada vez más grande.
+const TOKEN_TTL_DAYS = 30;
+const TOKEN_TTL_MS = TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+function tokenExpirado_(fila) {
+  const created = new Date(fila && fila.fecha_creacion);
+  if (isNaN(created)) return true; // sin fecha parseable → caduca (defensivo)
+  return (Date.now() - created.getTime()) > TOKEN_TTL_MS;
+}
+
 function crearTokenSesion_(username) {
   const token = Utilities.getUuid();
   const usernameNorm = String(username || '').trim();
-  const filas = leerAuthHojaGenerica_('Tokens');
-  filas.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
-  escribirAuthHojaGenerica_('Tokens', filas);
+  // Purga oportunista: cada login elimina los tokens expirados de CUALQUIER
+  // usuario, así la hoja Tokens (y su caché) se mantiene acotada aunque nadie
+  // haga logout. Reescribimos la hoja igualmente, así que no añade coste.
+  const vivos = leerAuthHojaGenerica_('Tokens').filter(r => r.token && !tokenExpirado_(r));
+  vivos.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
+  escribirAuthHojaGenerica_('Tokens', vivos);
   // Pre-rellenar caché para que la siguiente request valide sin abrir Sheets.
   cachePutJson_(tokenCacheKey_(token), { u: usernameNorm }, CACHE_TTL_TOKEN_SEC);
   return token;
@@ -398,7 +413,13 @@ function validarTokenSesion_(token) {
   if (hit && hit.u) return String(hit.u);
   // 2) Fallback a la hoja (con caché de hoja + memoria de request).
   const fila = leerAuthHojaGenerica_('Tokens').find(r => String(r.token || '') === t);
-  const username = fila ? String(fila.username || '').trim() : '';
+  if (!fila) return '';
+  if (tokenExpirado_(fila)) {
+    // Expirado pero aún presente en la hoja: purga perezosa y rechazo.
+    invalidarTokenSesion_(t);
+    return '';
+  }
+  const username = String(fila.username || '').trim();
   if (username) cachePutJson_(tokenCacheKey_(t), { u: username }, CACHE_TTL_TOKEN_SEC);
   return username;
 }
@@ -409,7 +430,8 @@ function invalidarTokenSesion_(token) {
   // Invalidar caché ANTES de reescribir para que un request concurrente no
   // rehidrate el token revocado desde la hoja vieja todavía cacheada.
   cacheRemove_(tokenCacheKey_(t));
-  escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t));
+  // Piggyback: aprovechar el rewrite del logout para purgar también expirados.
+  escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t && !tokenExpirado_(r)));
 }
 
 // ───────── Usuarios ─────────
@@ -532,6 +554,8 @@ function resetearContrasenaAdmin(username, passwordNueva) {
   rows[idx].salt = Utilities.getUuid().replace(/-/g, '');
   rows[idx].password_hash = passwordHash_(nueva, rows[idx].salt);
   escribirUsuariosAuth_(rows);
+  // Contraseña reseteada por admin → revocar TODAS las sesiones del usuario.
+  invalidarTokensDeUsuario_(user);
   return { ok: true, user: user };
 }
 
@@ -580,12 +604,19 @@ function eliminarUsuarioAdmin(username) {
   return { ok: true, user: user };
 }
 
-function invalidarTokensDeUsuario_(username) {
+function invalidarTokensDeUsuario_(username, exceptToken) {
   const u = String(username || '').trim().toLowerCase();
   if (!u) return;
-  escribirAuthHojaGenerica_('Tokens',
-    leerAuthHojaGenerica_('Tokens').filter(r => String(r.username || '').trim().toLowerCase() !== u)
+  const except = String(exceptToken || '').trim();
+  const filas = leerAuthHojaGenerica_('Tokens');
+  const revocados = filas.filter(r =>
+    String(r.username || '').trim().toLowerCase() === u && String(r.token || '') !== except
   );
+  if (!revocados.length) return;
+  // Limpiar también el caché por-token: si no, un token ya revocado sigue
+  // válido hasta 30 min vía CacheService pese a no estar en la hoja.
+  revocados.forEach(r => cacheRemove_(tokenCacheKey_(r.token)));
+  escribirAuthHojaGenerica_('Tokens', filas.filter(r => revocados.indexOf(r) < 0));
 }
 
 function cambiarMiContrasena(passwordActual, passwordNueva) {
@@ -609,6 +640,9 @@ function cambiarMiContrasena(passwordActual, passwordNueva) {
   rows[idx].salt = Utilities.getUuid().replace(/-/g, '');
   rows[idx].password_hash = passwordHash_(nueva, rows[idx].salt);
   escribirUsuariosAuth_(rows);
+  // Cambio de contraseña → revocar las demás sesiones (la actual se conserva
+  // para no tumbar la request en curso del propio usuario).
+  invalidarTokensDeUsuario_(actor, _currentToken);
   return { ok: true, user: actor };
 }
 
