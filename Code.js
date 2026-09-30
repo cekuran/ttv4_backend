@@ -51,15 +51,36 @@ const PALETTE = ['#4285F4','#EA4335','#FBBC04','#34A853','#A142F4','#24C1E0','#F
 // Límites GAS: ~100 KB/entrada, TTL máx. 21600 s. Fallos de caché se ignoran.
 const CACHE_TTL_TOKEN_SEC = 30 * 60;       // 30 min — validación de sesión
 const CACHE_TTL_AUTH_SHEET_SEC = 5 * 60;   // 5 min — hojas del master sheet
-const CACHE_MAX_JSON_CHARS = 90000;        // margen bajo el límite ~100 KB
+const CACHE_MAX_JSON_CHARS = 90000;        // margen bajo el límite ~100 KB (tras gzip+base64)
+const CACHE_GZIP_MIN_CHARS = 4000;         // por debajo, gzip solo añade overhead
+const CACHE_TTL_USER_DATA_SEC = 10 * 60;   // 10 min — filas de Tasks/Labels/TimeEntries/... por hoja
+const CACHE_TTL_SCHEMA_SEC = 30 * 60;      // 30 min — "el esquema de esta hoja ya se verificó"
 
 function scriptCache_() { return CacheService.getScriptCache(); }
 
+// Formato: JSON plano (compatible con entradas antiguas) o 'z:' + base64(gzip(JSON)).
+function cacheEncode_(value) {
+  const json = JSON.stringify(value);
+  if (!json) return '';
+  if (json.length < CACHE_GZIP_MIN_CHARS) return json;
+  const gz = Utilities.gzip(Utilities.newBlob(json, 'application/json'));
+  return 'z:' + Utilities.base64Encode(gz.getBytes());
+}
+
+function cacheDecode_(raw) {
+  if (raw.charAt(0) === 'z' && raw.charAt(1) === ':') {
+    const bytes = Utilities.base64Decode(raw.slice(2));
+    const json = Utilities.ungzip(Utilities.newBlob(bytes, 'application/x-gzip')).getDataAsString();
+    return JSON.parse(json);
+  }
+  return JSON.parse(raw);
+}
+
 function cachePutJson_(key, value, ttlSec) {
   try {
-    const json = JSON.stringify(value);
-    if (!json || json.length > CACHE_MAX_JSON_CHARS) return false;
-    scriptCache_().put(key, json, Math.min(ttlSec || CACHE_TTL_AUTH_SHEET_SEC, 21600));
+    const enc = cacheEncode_(value);
+    if (!enc || enc.length > CACHE_MAX_JSON_CHARS) return false;
+    scriptCache_().put(key, enc, Math.min(ttlSec || CACHE_TTL_AUTH_SHEET_SEC, 21600));
     return true;
   } catch (e) { return false; }
 }
@@ -68,18 +89,33 @@ function cacheGetJson_(key) {
   try {
     const raw = scriptCache_().get(key);
     if (!raw) return null;
-    return JSON.parse(raw);
+    return cacheDecode_(raw);
   } catch (e) { return null; }
+}
+
+// ───────── Lock (serializa lecturas-modificaciones-escrituras) ─────────
+// Con caché entre requests, dos escrituras concurrentes sobre la misma hoja
+// perderían cambios (lectura-modifica-escribe). Las acciones que mutan datos
+// corren dentro del lock; las lecturas sólo lo toman al rellenar caché.
+let _lockHeld = false;
+
+function withLock_(fn) {
+  if (_lockHeld) return fn();
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); }
+  catch (e) { throw new Error('El servidor está ocupado, inténtalo de nuevo'); }
+  _lockHeld = true;
+  try { return fn(); }
+  finally {
+    _lockHeld = false;
+    try { lock.releaseLock(); } catch (e) { /* ignore */ }
+  }
 }
 
 function cacheRemove_(key) {
   try { scriptCache_().remove(key); } catch (e) { /* ignore */ }
 }
 
-// ponytail: payloads auth (Usuarios/Tokens/HojasUsuarios/Spreadsheets/Config) son
-// pequeños (<10 KB típicamente), gzip solo mete overhead. Si hojas auth crecen
-// hasta chocar con el límite de ~100 KB, añadir prefijo gzip como en
-// finanzasFamiliaMs (cacheSerialize_ / cacheDeserialize_ con Utilities.gzip).
 function tokenCacheKey_(token) { return 'tok:' + String(token || '').trim(); }
 function authSheetCacheKey_(nombre) { return 'auth:' + String(nombre || ''); }
 
@@ -161,19 +197,60 @@ function ssActiva_() {
   return authSs_();
 }
 
+let _sheetsLoaded = false;  // ss.getSheets() ya volcado en _sheetObjCache
+let _schemaHealed = false;   // ensureUserSchema_ ya se reintentó en este request
+
+function loadSheetObjects_(ss) {
+  // Una sola llamada a la API en vez de un getSheetByName por hoja.
+  ss.getSheets().forEach(s => { _sheetObjCache[s.getName()] = s; });
+  _sheetsLoaded = true;
+}
+
 function getUserSheet_(name) {
   if (_sheetObjCache[name]) return _sheetObjCache[name];
-  const s = ssActiva_().getSheetByName(name);
-  if (s) _sheetObjCache[name] = s;
-  return s;
+  const ss = ssActiva_();
+  if (!_sheetsLoaded) loadSheetObjects_(ss);
+  // Auto-reparación: la bandera de esquema en caché puede estar obsoleta si alguien
+  // borró una hoja a mano.
+  if (!_sheetObjCache[name] && SHEETS[name] && _currentSheetId && !_schemaHealed) {
+    _schemaHealed = true;
+    withLock_(() => ensureUserSchema_(_currentSheetId));
+    loadSheetObjects_(ss);
+  }
+  return _sheetObjCache[name] || null;
+}
+
+// ── Caché compartida de datos de usuario (entre requests) ──
+// Clave por (hoja activa, nombre de hoja). Las escrituras la eliminan
+// (markUserDirty_) y el siguiente lector la vuelve a rellenar desde Sheets.
+function userCacheKey_(name) { return 'ud:' + _currentSheetId + ':' + name; }
+function schemaCacheKey_(id) { return 'schema:' + id; }
+
+function markUserDirty_(name) {
+  if (_currentSheetId) cacheRemove_(userCacheKey_(name));
+}
+
+function prefetchUserCache_(names) {
+  if (!_currentSheetId) return;
+  const pend = names.filter(n => !_userReadCache[n]);
+  if (!pend.length) return;
+  let got;
+  try { got = scriptCache_().getAll(pend.map(userCacheKey_)); } catch (e) { return; }
+  pend.forEach(n => {
+    const raw = got[userCacheKey_(n)];
+    if (!raw || _userReadCache[n]) return;
+    try { _userReadCache[n] = cacheDecode_(raw); } catch (e) { /* ignore */ }
+  });
 }
 
 function invalidateUserDataCache_(name) {
   if (name) {
     delete _userReadCache[name];
     delete _headersCache[name];
+    markUserDirty_(name);
     // no borramos _sheetObjCache: el objeto Sheet sigue válido
   } else {
+    Object.keys(_userReadCache).forEach(markUserDirty_);
     _userReadCache = {};
     _headersCache = {};
   }
@@ -183,10 +260,15 @@ function invalidateUserDataCache_(name) {
 
 let _currentToken = '';
 let _currentSheetId = '';
+let _userMemo = null;   // { token, user } — evita revalidar el token en cada helper
+let _rolMemo = null;    // { user, rol }
 
 function currentUser_() {
   if (!_currentToken) return '';
-  return validarTokenSesion_(_currentToken);
+  if (_userMemo && _userMemo.token === _currentToken) return _userMemo.user;
+  const u = validarTokenSesion_(_currentToken);
+  _userMemo = { token: _currentToken, user: u };
+  return u;
 }
 
 function requireUsuario_() {
@@ -198,8 +280,11 @@ function requireUsuario_() {
 function currentRol_() {
   const u = currentUser_();
   if (!u) return '';
+  if (_rolMemo && _rolMemo.user === u) return _rolMemo.rol;
   const row = buscarUsuario_(u);
-  return row ? String(row.rol || ROLES.BASICO) : '';
+  const rol = row ? String(row.rol || ROLES.BASICO) : '';
+  _rolMemo = { user: u, rol: rol };
+  return rol;
 }
 
 function requireAdmin_() {
@@ -215,32 +300,63 @@ const ALWAYS_ALLOWED_FOR_NO_HOJAS = new Set([
   'listarMisHojas', 'cambiarHojaActiva', 'cambiarMiContrasena'
 ]);
 
-function usuarioTieneHojas_(username) {
+function usuarioTieneHojas_(username, links) {
   if (!username) return false;
-  return leerHojasUsuarios_().some(l =>
+  return (links || leerHojasUsuarios_()).some(l =>
     String(l.username || '').trim().toLowerCase() === String(username || '').trim().toLowerCase()
   );
+}
+
+// Acciones que no modifican datos: corren sin lock. El resto (mutaciones) se
+// serializan con withLock_ para que la caché compartida no pierda escrituras.
+const READ_ONLY_ACTIONS = new Set([
+  'bootstrap', 'bootstrapBase', 'getInitialData',
+  'getTasks', 'getLabels', 'getEntries', 'getActiveTimer',
+  'getRoutines', 'getRoutineStatus', 'getDailyRoutineWeekStatus',
+  'listarMisHojas', 'listarUsuariosAdmin', 'listarSpreadsheetsAdmin',
+  'listarVinculacionesAdmin', 'adminOverview'
+]);
+
+function resetAuthMemCache_() {
+  Object.keys(_authReadCache).forEach(k => { delete _authReadCache[k]; });
 }
 
 function _authadmin(token, fnName, ...args) {
   const username = validarTokenSesion_(token);
   if (!username) throw new Error('No autenticado');
-  _currentToken = String(token || '').trim();
-  // Limpiar cachés de datos de usuario al resolver la hoja (por si el token
-  // llega a un request con otra hoja activa).
-  _userReadCache = {};
-  _headersCache = {};
-  _sheetObjCache = {};
-  try { _currentSheetId = resolverHojaActivaId_(username); }
-  catch (e) { _currentSheetId = ''; }
-  const usuario = buscarUsuario_(username);
-  const rol = usuario ? String(usuario.rol || ROLES.BASICO) : ROLES.BASICO;
-  if (rol !== ROLES.ADMIN && !usuarioTieneHojas_(username) && !ALWAYS_ALLOWED_FOR_NO_HOJAS.has(fnName)) {
-    throw new Error('No tienes hojas de cálculo asignadas. Pide al administrador que vincule una hoja.');
-  }
   const fn = globalThis[fnName];
   if (typeof fn !== 'function') throw new Error('Función no encontrada: ' + fnName);
-  return fn.apply(null, args);
+
+  const run = () => {
+    _currentToken = String(token || '').trim();
+    _userMemo = { token: _currentToken, user: username };
+    _rolMemo = null;
+    // Limpiar cachés de datos de usuario al resolver la hoja (por si el token
+    // llega a un request con otra hoja activa).
+    _userReadCache = {};
+    _headersCache = {};
+    _sheetObjCache = {};
+    _sheetsLoaded = false;
+    _schemaHealed = false;
+    // Una sola lectura de HojasUsuarios/Usuarios para resolver hoja, rol y permiso.
+    const links = leerHojasUsuarios_();
+    try { _currentSheetId = resolverHojaActivaId_(username, links); }
+    catch (e) { _currentSheetId = ''; }
+    const usuario = buscarUsuario_(username);
+    const rol = usuario ? String(usuario.rol || ROLES.BASICO) : ROLES.BASICO;
+    _rolMemo = { user: username, rol: usuario ? rol : '' };
+    if (rol !== ROLES.ADMIN && !usuarioTieneHojas_(username, links) && !ALWAYS_ALLOWED_FOR_NO_HOJAS.has(fnName)) {
+      throw new Error('No tienes hojas de cálculo asignadas. Pide al administrador que vincule una hoja.');
+    }
+    return fn.apply(null, args);
+  };
+
+  if (READ_ONLY_ACTIONS.has(fnName)) return run();
+  return withLock_(() => {
+    // Otro request pudo escribir mientras esperábamos el lock: releer tablas auth.
+    resetAuthMemCache_();
+    return run();
+  });
 }
 
 // ───────── Auth sheet helpers ─────────
@@ -335,10 +451,10 @@ function escribirSpreadsheets_(filas) { escribirAuthHojaGenerica_('Spreadsheets'
 function leerHojasUsuarios_() { return leerAuthHojaGenerica_('HojasUsuarios'); }
 function escribirHojasUsuarios_(filas) { escribirAuthHojaGenerica_('HojasUsuarios', filas); }
 
-function resolverHojaActivaId_(username) {
+function resolverHojaActivaId_(username, allLinks) {
   username = String(username || '').trim();
   if (!username) return '';
-  const links = leerHojasUsuarios_().filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
+  const links = (allLinks || leerHojasUsuarios_()).filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
   const defecto = links.find(l => String(l.por_defecto) === 'true' || String(l.por_defecto) === true);
   if (defecto) return String(defecto.spreadsheet_id);
   if (links.length) return String(links[0].spreadsheet_id);
@@ -397,9 +513,13 @@ function crearTokenSesion_(username) {
   // Purga oportunista: cada login elimina los tokens expirados de CUALQUIER
   // usuario, así la hoja Tokens (y su caché) se mantiene acotada aunque nadie
   // haga logout. Reescribimos la hoja igualmente, así que no añade coste.
-  const vivos = leerAuthHojaGenerica_('Tokens').filter(r => r.token && !tokenExpirado_(r));
-  vivos.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
-  escribirAuthHojaGenerica_('Tokens', vivos);
+  // Lock: dos logins simultáneos no deben pisarse la hoja Tokens.
+  withLock_(() => {
+    delete _authReadCache['Tokens']; // releer bajo lock (otro login pudo escribir)
+    const vivos = leerAuthHojaGenerica_('Tokens').filter(r => r.token && !tokenExpirado_(r));
+    vivos.push({ token: token, username: usernameNorm, fecha_creacion: isoAhora_() });
+    escribirAuthHojaGenerica_('Tokens', vivos);
+  });
   // Pre-rellenar caché para que la siguiente request valide sin abrir Sheets.
   cachePutJson_(tokenCacheKey_(token), { u: usernameNorm }, CACHE_TTL_TOKEN_SEC);
   return token;
@@ -431,15 +551,20 @@ function invalidarTokenSesion_(token) {
   // rehidrate el token revocado desde la hoja vieja todavía cacheada.
   cacheRemove_(tokenCacheKey_(t));
   // Piggyback: aprovechar el rewrite del logout para purgar también expirados.
-  escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t && !tokenExpirado_(r)));
+  withLock_(() => {
+    delete _authReadCache['Tokens'];
+    escribirAuthHojaGenerica_('Tokens', leerAuthHojaGenerica_('Tokens').filter(r => String(r.token || '') !== t && !tokenExpirado_(r)));
+  });
 }
 
 // ───────── Usuarios ─────────
 
 function asegurarUsuarios_() {
-  asegurarAuthHojaGenerica_('Usuarios');
+  // Camino caliente: si ya hay usuarios (caché o hoja) no tocamos el master
+  // spreadsheet. leerAuthHojaGenerica_ crea la hoja sólo si falta.
   const rows = leerUsuariosAuth_().filter(r => r.username);
   if (rows.length) return;
+  asegurarAuthHojaGenerica_('Usuarios');
 
   // Seed admin por defecto. La contraseña inicial debe cambiarse en el primer login.
   const salt = Utilities.getUuid().replace(/-/g, '');
@@ -718,8 +843,9 @@ function listarVinculacionesAdmin() {
   const porId = {};
   sheets.forEach(s => { porId[String(s.spreadsheet_id)] = s; });
   const users = leerUsuariosAuth_().map(u => String(u.username || '').trim()).filter(Boolean);
+  const allLinks = leerHojasUsuarios_();
   return users.map(username => {
-    const links = leerHojasUsuarios_().filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
+    const links = allLinks.filter(l => String(l.username || '').trim().toLowerCase() === username.toLowerCase());
     return {
       username: username,
       hojas: links.map(l => ({
@@ -729,6 +855,16 @@ function listarVinculacionesAdmin() {
       }))
     };
   });
+}
+
+// Panel admin en 1 solo viaje (antes: 3 llamadas por visita).
+function adminOverview() {
+  requireAdmin_();
+  return {
+    users: listarUsuariosAdmin(),
+    sheets: listarSpreadsheetsAdmin(),
+    links: listarVinculacionesAdmin()
+  };
 }
 
 function vincularHojaUsuarioAdmin(username, spreadsheetId, porDefecto) {
@@ -844,6 +980,8 @@ function cambiarHojaActiva(spreadsheetId) {
   _userReadCache = {};
   _headersCache = {};
   _sheetObjCache = {};
+  _sheetsLoaded = false;
+  _schemaHealed = false;
   delete _ssCache[id]; // forzar reopen limpio si hace falta
   return { ok: true, hojaActivaId: id };
 }
@@ -876,20 +1014,31 @@ function bootstrapBase() {
   }
 
   _currentSheetId = hojaActivaId;
-  ensureUserSchema_(hojaActivaId);
-  // ponytail: el frontend solía disparar getRoutines + getRoutineStatus + getDailyRoutineWeekStatus
-  // tras bootstrap — 3 round-trips extra en el cold-start (cada uno puede ser 30s en primer hit).
-  // Ahora los devolvemos aquí, en la misma ejecución de Apps Script: 8 readRows_ pero 1 viaje.
+  // Camino caliente: todo en caché compartida → 0 lecturas de Sheets y sin lock.
+  // Camino frío: un solo lock para verificar esquema y rellenar las hojas que falten.
+  const dataSheets = ['Tasks', 'Labels', 'TimeEntries', 'ActiveTimer', 'Routines',
+    'DailyCompletions', 'WeeklyCompletions', 'MonthlyCompletions'];
+  prefetchUserCache_(dataSheets);
+  const needSchema = !cacheGetJson_(schemaCacheKey_(hojaActivaId));
+  const missing = dataSheets.filter(n => !_userReadCache[n]);
+  if (needSchema || missing.length) {
+    withLock_(() => {
+      if (needSchema) ensureUserSchema_(hojaActivaId);
+      prefetchUserCache_(missing);
+      missing.forEach(n => { readRowsRef_(n); });
+    });
+  }
+  // Todo sale de la misma ejecución: 1 viaje en vez de 4 (tasks/labels/entries/rutinas).
   return {
     sesion: { user: owner, rol: currentRol_() || ROLES.BASICO },
     version: APP_VERSION,
     hojas: hojasUsuario,
     hojaActivaId: hojaActivaId,
-    tasks: getTasks(),
-    labels: getLabels(),
-    entries: getEntries(),
+    tasks: readRowsRef_('Tasks'),
+    labels: readRowsRef_('Labels'),
+    entries: readRowsRef_('TimeEntries'),
     activeTimer: getActiveTimer(),
-    routines: readRows_('Routines'),
+    routines: readRowsRef_('Routines'),
     routineStatus: getRoutineStatus(),
     routineWeek: getDailyRoutineWeekStatus(7, 0)
   };
@@ -1003,8 +1152,10 @@ function ensureUserSchema_(sheetId) {
   const id = String(sheetId || _currentSheetId || '');
   if (!id) throw new Error('No hay hoja activa');
   const ss = openSsById_(id);
+  const existing = {};
+  ss.getSheets().forEach(sh => { existing[sh.getName()] = sh; });
   Object.entries(SHEETS).forEach(([name, headers]) => {
-    let s = ss.getSheetByName(name);
+    let s = existing[name];
     if (!s) s = ss.insertSheet(name);
     if (s.getLastRow() === 0) {
       s.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -1026,6 +1177,10 @@ function ensureUserSchema_(sheetId) {
     }
   });
   migrateLegacyRoutineCompletions_(ss);
+  // Las hojas pudieron crearse/borrarse: descartar objetos Sheet cacheados.
+  _sheetObjCache = {};
+  _sheetsLoaded = false;
+  cachePutJson_(schemaCacheKey_(id), 1, CACHE_TTL_SCHEMA_SEC);
 }
 
 function ensureSchema_() {
@@ -1080,62 +1235,78 @@ function getHeaders_(name) {
   return headers;
 }
 
-function readRows_(name) {
-  if (_userReadCache[name]) return cloneRows_(_userReadCache[name]);
+function readSheetRows_(name) {
   const s = getUserSheet_(name);
-  if (!s || s.getLastRow() <= 1) {
-    _userReadCache[name] = [];
-    return [];
-  }
+  if (!s || s.getLastRow() <= 1) return [];
   const values = s.getDataRange().getValues();
   const headers = values[0];
   _headersCache[name] = headers;
-  const rows = values.slice(1).map(row => {
+  return values.slice(1).map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i]; });
     return normalizeRow_(obj);
-    });
-  // belt-and-suspenders: strip non-JSON classes
-  const clean = JSON.parse(JSON.stringify(rows));
-  _userReadCache[name] = clean;
-  return cloneRows_(clean);
+  });
 }
 
+// Lectura por referencia (NO mutar el resultado). Orden de búsqueda:
+// memoria del request → caché compartida → hoja (bajo lock, rellena la caché).
+function readRowsRef_(name) {
+  if (_userReadCache[name]) return _userReadCache[name];
+  if (!_currentSheetId) {
+    _userReadCache[name] = readSheetRows_(name);
+    return _userReadCache[name];
+  }
+  const key = userCacheKey_(name);
+  const hit = cacheGetJson_(key);
+  if (hit) { _userReadCache[name] = hit; return hit; }
+  return withLock_(() => {
+    // Otro request pudo rellenar la caché mientras esperábamos el lock.
+    const again = cacheGetJson_(key);
+    if (again) { _userReadCache[name] = again; return again; }
+    const rows = readSheetRows_(name);
+    _userReadCache[name] = rows;
+    cachePutJson_(key, rows, CACHE_TTL_USER_DATA_SEC);
+    return rows;
+  });
+}
+
+function readRows_(name) {
+  return cloneRows_(readRowsRef_(name));
+}
+
+// Devuelve la fila recién escrita, ya normalizada (fechas ISO, sin undefined).
 function appendRow_(name, obj) {
   const s = getUserSheet_(name);
   const headers = getHeaders_(name);
   const row = headers.map(h => obj[h] !== undefined ? obj[h] : '');
   s.appendRow(row);
-  // Mantener caché coherente
-  if (_userReadCache[name]) {
-    const copy = normalizeRow_(Object.assign({}, obj));
-    // Asegurar que las fechas/ISO queden como string
-    _userReadCache[name].push(JSON.parse(JSON.stringify(copy)));
-  } else {
-    invalidateUserDataCache_(name);
-  }
+  const out = {};
+  headers.forEach((h, i) => { out[h] = row[i]; });
+  normalizeRow_(out);
+  if (_userReadCache[name]) _userReadCache[name].push(out);
+  markUserDirty_(name);
+  return Object.assign({}, out);
 }
 
+// La caché compartida puede estar desfasada respecto a la hoja: nunca se usan
+// sus índices para localizar la fila. Solo se lee la columna id (barato).
 function findRowNum_(name, id) {
   const s = getUserSheet_(name);
-  if (!s || s.getLastRow() <= 1) return -1;
-  // Preferir caché en memoria si está caliente
-  if (_userReadCache[name]) {
-    const idx = _userReadCache[name].findIndex(r => String(r.id) === String(id));
-    return idx >= 0 ? idx + 2 : -1; // +2 porque fila 1 = header
-  }
+  if (!s) return -1;
+  const last = s.getLastRow();
+  if (last <= 1) return -1;
   const headers = getHeaders_(name);
   const idCol = headers.indexOf('id');
   if (idCol < 0) return -1;
-  const last = s.getLastRow();
-  // Leer solo la columna id (mucho más barato que getDataRange completo)
-  const ids = s.getRange(2, idCol + 1, last, 1).getValues();
+  const ids = s.getRange(2, idCol + 1, last - 1, 1).getValues();
+  const target = String(id);
   for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(id)) return i + 2;
+    if (String(ids[i][0]) === target) return i + 2;
   }
   return -1;
 }
 
+// Devuelve la fila actualizada y normalizada.
 function updateRow_(name, id, patch) {
   const s = getUserSheet_(name);
   const rowNum = findRowNum_(name, id);
@@ -1148,26 +1319,27 @@ function updateRow_(name, id, patch) {
     else throw new Error(`${name} no tiene la columna "${k}". Ejecuta bootstrap para migrar el esquema.`);
   });
   s.getRange(rowNum, 1, 1, headers.length).setValues([row]);
-  // Actualizar caché en memoria
+  const out = {};
+  headers.forEach((h, i) => { out[h] = row[i]; });
+  normalizeRow_(out);
   if (_userReadCache[name]) {
-    const idx = rowNum - 2;
-    if (idx >= 0 && idx < _userReadCache[name].length) {
-      Object.assign(_userReadCache[name][idx], patch);
-      normalizeRow_(_userReadCache[name][idx]);
-    }
+    const idx = _userReadCache[name].findIndex(r => String(r.id) === String(id));
+    if (idx >= 0) _userReadCache[name][idx] = out;
+    else delete _userReadCache[name];
   }
+  markUserDirty_(name);
+  return Object.assign({}, out);
 }
 
 function deleteRow_(name, id) {
   const s = getUserSheet_(name);
   const rowNum = findRowNum_(name, id);
-  if (rowNum > 0) {
-    s.deleteRow(rowNum);
-    if (_userReadCache[name]) {
-      const idx = rowNum - 2;
-      if (idx >= 0) _userReadCache[name].splice(idx, 1);
-    }
+  if (rowNum > 0) s.deleteRow(rowNum);
+  if (_userReadCache[name]) {
+    const idx = _userReadCache[name].findIndex(r => String(r.id) === String(id));
+    if (idx >= 0) _userReadCache[name].splice(idx, 1);
   }
+  markUserDirty_(name);
 }
 
 // --- Bootstrap data ---
@@ -1181,21 +1353,21 @@ function getInitialData() {
 }
 
 // --- Tasks ---
+// Los mutadores devuelven SÓLO la fila afectada (o {ok,id} en deletes): el cliente
+// aplica el cambio en su estado local en vez de re-descargar la lista completa.
 function getTasks() { return readRows_('Tasks'); }
 function createTask(name, labelId) {
   const t = { id: uid_(), name: String(name).trim(), labelId: labelId || '', createdAt: iso_() };
-  appendRow_('Tasks', t);
-  return getTasks();
+  return appendRow_('Tasks', t);
 }
 function updateTask(id, patch) {
   if ('name' in patch) patch.name = String(patch.name).trim();
   if ('labelId' in patch) patch.labelId = patch.labelId || '';
-  updateRow_('Tasks', id, patch);
-  return getTasks();
+  return updateRow_('Tasks', id, patch);
 }
 function deleteTask(id) {
   deleteRow_('Tasks', id);
-  return getTasks();
+  return { ok: true, id: String(id) };
 }
 
 // --- Labels ---
@@ -1206,8 +1378,7 @@ function nextColor_() {
 }
 function createLabel(name) {
   const l = { id: uid_(), name: String(name).trim(), color: nextColor_(), createdAt: iso_() };
-  appendRow_('Labels', l);
-  return getLabels();
+  return appendRow_('Labels', l);
 }
 function updateLabel(id, patch) {
   if ('name' in patch) patch.name = String(patch.name).trim();
@@ -1231,7 +1402,7 @@ function createEntry(payload) {
   if (isNaN(start) || isNaN(end)) throw new Error('invalid start/end time');
   if (end <= start) throw new Error('end must be after start');
   const durationMinutes = Math.max(1, Math.round((end - start) / 60000));
-  appendRow_('TimeEntries', {
+  return appendRow_('TimeEntries', {
     id: uid_(),
     taskId: payload.taskId,
     startTime: start,
@@ -1241,11 +1412,10 @@ function createEntry(payload) {
     notes: payload.notes || '',
     createdAt: new Date()
   });
-  return getEntries();
 }
 function deleteEntry(id) {
   deleteRow_('TimeEntries', id);
-  return getEntries();
+  return { ok: true, id: String(id) };
 }
 
 // ponytail: one-shot rebaser for entries stored under the buggy ISO parser — run from the editor with your local UTC offset (PDT = +7, UTC = 0)
@@ -1341,6 +1511,17 @@ function normalizeStoredPeriodKey_(value, period) {
 }
 
 function getRoutines() { return readRows_('Routines'); }
+
+// Payload estándar tras mutar rutinas: el cliente sustituye su estado de rutinas
+// completo con 1 sola respuesta (antes: mutación + 2 refetch).
+function routinesPayload_() {
+  return {
+    routines: readRows_('Routines'),
+    routineStatus: getRoutineStatus(),
+    routineWeek: getDailyRoutineWeekStatus(7, 0)
+  };
+}
+
 function createRoutine(name, period) {
   const p = String(period || '').trim();
   if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido (daily|weekly|monthly)');
@@ -1348,13 +1529,13 @@ function createRoutine(name, period) {
   if (!n) throw new Error('Indica un nombre');
   // ponytail: dedupe (name, period) — mismo nombre + mismo periodo = mismo concepto, no se duplica.
   // Si el usuario quiere una variante ("Ejercicio AM" vs "Ejercicio PM") que cambie el nombre.
-  const dup = readRows_('Routines').some(r =>
+  const dup = readRowsRef_('Routines').some(r =>
     String(r.period || '').trim() === p &&
     String(r.name || '').trim().toLowerCase() === n.toLowerCase()
   );
   if (dup) throw new Error('Ya existe una tarea recurrente con ese nombre en ese periodo');
   appendRow_('Routines', { id: uid_(), name: n, period: p, createdAt: iso_() });
-  return getRoutines();
+  return routinesPayload_();
 }
 function updateRoutine(id, patch) {
   if ('name' in patch) patch.name = String(patch.name || '').trim();
@@ -1364,82 +1545,19 @@ function updateRoutine(id, patch) {
     patch.period = p;
   }
   updateRow_('Routines', id, patch);
-  return getRoutines();
-}
-function deleteRoutine(id) {
-  deleteRow_('Routines', id);
-  // Limpieza best-effort de completions huérfanas en las tres hojas por periodo:
-  // quita routineId del campo ids de cada hoja y borra filas que quedan vacías.
-  const target = String(id);
-  ['DailyCompletions', 'WeeklyCompletions', 'MonthlyCompletions'].forEach(name => {
-    try {
-      const sheet = getUserSheet_(name);
-      if (!sheet) return;
-      const headers = getHeaders_(name);
-      if (!headers || headers.length < 2) return;
-      const rows = readRows_(name);
-      const cleaned = rows
-        .map(r => ({ periodKey: r.periodKey, ids: String(r.ids || '').split(',').filter(x => x && x !== target).join(',') }))
-        .filter(r => r.ids);
-      if (cleaned.length === 0) {
-        if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
-      } else {
-        const matriz = [headers].concat(cleaned.map(r => headers.map(h => r[h] != null ? r[h] : '')));
-        sheet.getRange(1, 1, matriz.length, headers.length).setValues(matriz);
-        if (sheet.getLastRow() > matriz.length) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
-      }
-      invalidateUserDataCache_(name);
-    } catch (e) { /* best-effort */ }
-  });
-  return getRoutines();
+  return routinesPayload_();
 }
 
-function toggleRoutineCompletion(routineId, period, periodKey) {
-  // El frontend manda el periodKey concreto (today / this week / this month). Las completions
-  // viven en tres hojas (una por periodo) con shape [periodKey, ids]. Si routineId ya está
-  // en la lista de ese periodKey, lo quitamos; si no, lo añadimos.
-  const routine = readRows_('Routines').find(r => String(r.id) === String(routineId));
-  if (!routine) throw new Error('Tarea recurrente no encontrada');
-  const p = String(period || '').trim();
-  const k = String(periodKey || '').trim();
-  if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
-  if (!k) throw new Error('PeriodKey requerido');
-
-  const sheetName = completionSheetName_(p);
+// Reescribe una hoja de completions (shape [periodKey, ids]) y sincroniza cachés.
+function writeCompletionRows_(sheetName, rows) {
   const sheet = getUserSheet_(sheetName);
   if (!sheet) throw new Error(sheetName + ' no existe; ejecuta bootstrap primero');
-
-  // ponytail: normalizamos el periodKey de cada fila (Sheets pudo coaccionar "2026-08-25"/
-  // "2026-08" a fecha al escribirlos) y colapsamos por periodo. Así el findIndex vuelve a
-  // acertar, y si ya había filas duplicadas para el mismo periodo se funden en una sola.
-  const byKey = new Map();
-  readRows_(sheetName).forEach(r => {
-    const key = normalizeStoredPeriodKey_(r.periodKey, p);
-    if (!key) return;
-    if (!byKey.has(key)) byKey.set(key, new Set());
-    const set = byKey.get(key);
-    String(r.ids || '').split(',').filter(Boolean).forEach(id => set.add(id));
-  });
-  const rows = Array.from(byKey.entries()).map(([periodKey, set]) => ({ periodKey, ids: Array.from(set).join(',') }));
-  const target = String(routineId);
-  const idx = rows.findIndex(r => r.periodKey === k);
-
-  let nextRows;
-  if (idx >= 0) {
-    const ids = String(rows[idx].ids || '').split(',').filter(Boolean);
-    const pos = ids.indexOf(target);
-    if (pos >= 0) ids.splice(pos, 1); else ids.push(target);
-    nextRows = rows.slice();
-    nextRows[idx] = { periodKey: k, ids: ids.join(',') };
-  } else {
-    nextRows = rows.concat([{ periodKey: k, ids: target }]);
-  }
-
   const headers = getHeaders_(sheetName);
-  if (nextRows.length === 0) {
-    if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+  const last = sheet.getLastRow();
+  if (rows.length === 0) {
+    if (last > 1) sheet.deleteRows(2, last - 1);
   } else {
-    const matriz = [headers].concat(nextRows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
+    const matriz = [headers].concat(rows.map(r => headers.map(h => r[h] != null ? r[h] : '')));
     const destino = sheet.getRange(1, 1, matriz.length, headers.length);
     // ponytail: forzamos formato de texto ANTES de escribir para que Sheets NO convierta el
     // periodKey ("2026-08-25", "2026-08") a fecha; si no, al releer vuelve como Date y rompe
@@ -1448,32 +1566,110 @@ function toggleRoutineCompletion(routineId, period, periodKey) {
     destino.setValues(matriz);
     // ponytail: setValues sólo rellena hasta matriz.length; las filas sobrantes quedan huérfanas
     // y la siguiente lectura las devuelve, así que el "uncheck" reaparece como checked.
-    if (sheet.getLastRow() > matriz.length) sheet.deleteRows(matriz.length + 1, sheet.getLastRow() - matriz.length);
+    if (last > matriz.length) sheet.deleteRows(matriz.length + 1, last - matriz.length);
   }
-  invalidateUserDataCache_(sheetName);
-  // ponytail: el frontend ya hace optimistic update + sólo necesita saber el estado canónico
-  // del (routine, periodKey) que acaba de tocar. Devolver getRoutineStatus() costaba 3 readRows_
-  // extra por toggle (Routines + WeeklyCompletions + MonthlyCompletions siempre, Daily a veces).
-  // Aquí ya leí­mos la fila del día/periodo tocado — sabemos el resultado sin volver a leer.
-  return {
-    routineId: target,
-    period: p,
-    periodKey: k,
-    completed: nextRows[idx >= 0 ? idx : nextRows.length - 1].ids.split(',').filter(String).indexOf(target) >= 0
-  };
+  _userReadCache[sheetName] = rows.map(r => ({ periodKey: r.periodKey, ids: r.ids }));
+  markUserDirty_(sheetName);
+}
+
+// Lee una hoja de completions como filas canónicas colapsadas por periodKey.
+function canonicalCompletionRows_(sheetName, period) {
+  const byKey = new Map();
+  readRowsRef_(sheetName).forEach(r => {
+    const key = normalizeStoredPeriodKey_(r.periodKey, period);
+    if (!key) return;
+    if (!byKey.has(key)) byKey.set(key, new Set());
+    const set = byKey.get(key);
+    String(r.ids || '').split(',').filter(Boolean).forEach(id => set.add(id));
+  });
+  return Array.from(byKey.entries()).map(([periodKey, set]) => ({ periodKey, ids: Array.from(set).join(',') }));
+}
+
+function deleteRoutine(id) {
+  deleteRow_('Routines', id);
+  // Limpieza best-effort de completions huérfanas en las tres hojas por periodo:
+  // quita routineId del campo ids de cada hoja y borra filas que quedan vacías.
+  const target = String(id);
+  [['daily', 'DailyCompletions'], ['weekly', 'WeeklyCompletions'], ['monthly', 'MonthlyCompletions']].forEach(([period, name]) => {
+    try {
+      const headers = getHeaders_(name);
+      if (!headers || headers.length < 2) return;
+      const rows = canonicalCompletionRows_(name, period);
+      if (!rows.some(r => r.ids.split(',').indexOf(target) >= 0)) return; // nada que limpiar
+      const cleaned = rows
+        .map(r => ({ periodKey: r.periodKey, ids: r.ids.split(',').filter(x => x && x !== target).join(',') }))
+        .filter(r => r.ids);
+      writeCompletionRows_(name, cleaned);
+    } catch (e) { /* best-effort */ }
+  });
+  return routinesPayload_();
+}
+
+// Aplica en UNA ejecución una lista de cambios [{routineId, period, periodKey, completed}]
+// (lo que antes eran N llamadas toggle en paralelo, con carrera sobre la misma hoja).
+// Es idempotente: fija el estado final en vez de invertirlo.
+function applyRoutineCompletions_(changes) {
+  const routineIds = new Set(readRowsRef_('Routines').map(r => String(r.id)));
+  const perSheet = {};
+  (changes || []).forEach(c => {
+    const p = String(c && c.period || '').trim();
+    const k = String(c && c.periodKey || '').trim();
+    const rid = String(c && c.routineId || '').trim();
+    if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
+    if (!k) throw new Error('PeriodKey requerido');
+    if (!routineIds.has(rid)) throw new Error('Tarea recurrente no encontrada');
+    (perSheet[p] = perSheet[p] || []).push({ rid, k, completed: !!c.completed });
+  });
+  const results = [];
+  Object.keys(perSheet).forEach(p => {
+    const sheetName = completionSheetName_(p);
+    // ponytail: normalizamos el periodKey de cada fila (Sheets pudo coaccionar "2026-08-25"/
+    // "2026-08" a fecha al escribirlos) y colapsamos por periodo.
+    const rows = canonicalCompletionRows_(sheetName, p);
+    const map = new Map(rows.map(r => [r.periodKey, new Set(r.ids.split(',').filter(Boolean))]));
+    perSheet[p].forEach(c => {
+      if (!map.has(c.k)) map.set(c.k, new Set());
+      const set = map.get(c.k);
+      if (c.completed) set.add(c.rid); else set.delete(c.rid);
+      results.push({ routineId: c.rid, period: p, periodKey: c.k, completed: c.completed });
+    });
+    const next = Array.from(map.entries())
+      .map(([periodKey, set]) => ({ periodKey, ids: Array.from(set).join(',') }))
+      .filter(r => r.ids);
+    writeCompletionRows_(sheetName, next);
+  });
+  return results;
+}
+
+function setRoutineCompletions(changes) {
+  applyRoutineCompletions_(changes);
+  return { routineStatus: getRoutineStatus(), routineWeek: getDailyRoutineWeekStatus(7, 0) };
+}
+
+function toggleRoutineCompletion(routineId, period, periodKey) {
+  // El frontend manda el periodKey concreto (today / this week / this month). Si routineId ya
+  // está en la lista de ese periodKey lo quitamos; si no, lo añadimos.
+  const p = String(period || '').trim();
+  const k = String(periodKey || '').trim();
+  if (!ROUTINE_PERIODS.has(p)) throw new Error('Periodo inválido');
+  if (!k) throw new Error('PeriodKey requerido');
+  const target = String(routineId);
+  const row = canonicalCompletionRows_(completionSheetName_(p), p).find(r => r.periodKey === k);
+  const done = !!row && row.ids.split(',').indexOf(target) >= 0;
+  return applyRoutineCompletions_([{ routineId: target, period: p, periodKey: k, completed: !done }])[0];
 }
 
 function getRoutineStatus() {
   // Devuelve para cada periodo (today/this week/this month): todas las rutinas del periodo
   // con un flag completed según routineId esté o no en la lista ids del periodKey actual.
-  const routines = readRows_('Routines');
+  const routines = readRowsRef_('Routines');
   const keyToday = periodKeyLocal_('daily');
   const keyWeek  = periodKeyLocal_('weekly');
   const keyMonth = periodKeyLocal_('monthly');
   const idsByPeriod = {
-    daily:   readRows_('DailyCompletions'),
-    weekly:  readRows_('WeeklyCompletions'),
-    monthly: readRows_('MonthlyCompletions')
+    daily:   readRowsRef_('DailyCompletions'),
+    weekly:  readRowsRef_('WeeklyCompletions'),
+    monthly: readRowsRef_('MonthlyCompletions')
   };
   const doneByPeriod = {};
   Object.keys(idsByPeriod).forEach(p => {
@@ -1505,7 +1701,7 @@ function getRoutineStatus() {
 // recibiera un bloque Thu..Wed y mapease Wed→domingo porque asumía Mon=índice 0.
 // El frontend usa DOW_LABELS_SHORT con lunes=0, así que necesitamos alinear Mon..Sun.
 function getDailyRoutineWeekStatus(daysBack, weeksBack) {
-  const routines = readRows_('Routines').filter(r => String(r.period) === 'daily');
+  const routines = readRowsRef_('Routines').filter(r => String(r.period) === 'daily');
   const n = Math.max(1, Math.min(60, Number(daysBack) || 7));
   const wb = Math.max(0, Math.min(52, Number(weeksBack) || 0));
   const ref = new Date();
@@ -1518,7 +1714,7 @@ function getDailyRoutineWeekStatus(daysBack, weeksBack) {
     dayKeys.push(periodKeyLocal_('daily', d));
   }
   const byKey = new Map();
-  readRows_('DailyCompletions').forEach(r => {
+  readRowsRef_('DailyCompletions').forEach(r => {
     const k = normalizeStoredPeriodKey_(r.periodKey, 'daily');
     if (!k) return;
     if (!byKey.has(k)) byKey.set(k, new Set());
@@ -1534,11 +1730,15 @@ function getDailyRoutineWeekStatus(daysBack, weeksBack) {
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
+  const row = readRowsRef_('ActiveTimer')[0];
+  if (!row || !row.taskId) return null;
+  return { taskId: String(row.taskId), startTime: String(row.startTime) };
+}
+
+function clearActiveTimerSheet_() {
   const s = getUserSheet_('ActiveTimer');
-  if (!s || s.getLastRow() < 2) return null;
-  const row = s.getRange(2, 1, 1, 2).getValues()[0];
-  if (!row[0]) return null;
-  return { taskId: String(row[0]), startTime: String(row[1]) };
+  if (s && s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
+  invalidateUserDataCache_('ActiveTimer');
 }
 
 function startTimer(taskId) {
@@ -1547,21 +1747,21 @@ function startTimer(taskId) {
   if (!s) throw new Error('ActiveTimer sheet missing; bootstrap first');
   if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   s.getRange(2, 1, 1, 2).setValues([[t.taskId, t.startTime]]);
+  invalidateUserDataCache_('ActiveTimer');
   return t;
 }
 
+// Devuelve la entrada creada (o null si no había timer).
 function stopTimer() {
   const timer = getActiveTimer();
   if (!timer) return null;
-  const s = getUserSheet_('ActiveTimer');
-  if (s && s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
-  createEntry({
+  clearActiveTimerSheet_();
+  return createEntry({
     taskId: timer.taskId,
     startTime: timer.startTime,
     endTime: iso_(),
     source: 'timer'
   });
-  return getEntries();
 }
 
 // ───────── API dispatch ─────────
@@ -1581,7 +1781,8 @@ const API_ACTIONS = new Set([
   'getEntries', 'createEntry', 'deleteEntry',
   'getActiveTimer', 'startTimer', 'stopTimer',
   'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
-  'toggleRoutineCompletion', 'getRoutineStatus', 'getDailyRoutineWeekStatus'
+  'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus',
+  'adminOverview'
 ]);
 
 const API_PUBLIC_ACTIONS = new Set([
