@@ -312,7 +312,7 @@ function usuarioTieneHojas_(username, links) {
 const READ_ONLY_ACTIONS = new Set([
   'bootstrap', 'bootstrapBase', 'getInitialData',
   'getTasks', 'getLabels', 'getEntries', 'getActiveTimer',
-  'getRoutines', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus',
+  'getRoutines', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus', 'getMonthlyRoutineMonthStatus',
   'listarMisHojas', 'listarUsuariosAdmin', 'listarSpreadsheetsAdmin',
   'listarVinculacionesAdmin', 'adminOverview'
 ]);
@@ -1743,6 +1743,20 @@ function getWeeklyRoutineWeekStatus(weeksBack) {
   return routines.map(r => ({ id: String(r.id), name: r.name, completed: done.has(String(r.id)) }));
 }
 
+// ponytail: Stats > Month — estado de las recurrentes MENSUALES del mes que está monthsBack meses atrás (clamp 0..36).
+function getMonthlyRoutineMonthStatus(monthsBack) {
+  const routines = readRowsRef_('Routines').filter(r => String(r.period) === 'monthly');
+  const mb = Math.max(0, Math.min(36, Number(monthsBack) || 0));
+  const now = new Date();
+  const key = periodKeyLocal_('monthly', new Date(now.getFullYear(), now.getMonth() - mb, 1));
+  const done = new Set();
+  readRowsRef_('MonthlyCompletions').forEach(r => {
+    if (normalizeStoredPeriodKey_(r.periodKey, 'monthly') !== key) return;
+    String(r.ids || '').split(',').filter(Boolean).forEach(id => done.add(id));
+  });
+  return routines.map(r => ({ id: String(r.id), name: r.name, completed: done.has(String(r.id)) }));
+}
+
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
@@ -1797,7 +1811,7 @@ const API_ACTIONS = new Set([
   'getEntries', 'createEntry', 'deleteEntry',
   'getActiveTimer', 'startTimer', 'stopTimer',
   'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
-  'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus',
+  'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus', 'getMonthlyRoutineMonthStatus',
   'adminOverview'
 ]);
 
