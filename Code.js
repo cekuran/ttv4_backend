@@ -312,7 +312,7 @@ function usuarioTieneHojas_(username, links) {
 const READ_ONLY_ACTIONS = new Set([
   'bootstrap', 'bootstrapBase', 'getInitialData',
   'getTasks', 'getLabels', 'getEntries', 'getActiveTimer',
-  'getRoutines', 'getRoutineStatus', 'getDailyRoutineWeekStatus',
+  'getRoutines', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus',
   'listarMisHojas', 'listarUsuariosAdmin', 'listarSpreadsheetsAdmin',
   'listarVinculacionesAdmin', 'adminOverview'
 ]);
@@ -1727,6 +1727,22 @@ function getDailyRoutineWeekStatus(daysBack, weeksBack) {
   });
 }
 
+// ponytail: Stats > Week — estado de las recurrentes SEMANALES de la semana ISO que está weeksBack
+// semanas atrás (clamp 0..52). Misma convención que getDailyRoutineWeekStatus.
+function getWeeklyRoutineWeekStatus(weeksBack) {
+  const routines = readRowsRef_('Routines').filter(r => String(r.period) === 'weekly');
+  const wb = Math.max(0, Math.min(52, Number(weeksBack) || 0));
+  const ref = new Date();
+  ref.setDate(ref.getDate() - wb * 7);
+  const key = periodKeyLocal_('weekly', ref);
+  const done = new Set();
+  readRowsRef_('WeeklyCompletions').forEach(r => {
+    if (normalizeStoredPeriodKey_(r.periodKey, 'weekly') !== key) return;
+    String(r.ids || '').split(',').filter(Boolean).forEach(id => done.add(id));
+  });
+  return routines.map(r => ({ id: String(r.id), name: r.name, completed: done.has(String(r.id)) }));
+}
+
 // --- Timer (per-user via ActiveTimer sheet in the user's spreadsheet) ---
 // Hoja de una sola fila debajo del header: si existe, hay timer activo.
 function getActiveTimer() {
@@ -1781,7 +1797,7 @@ const API_ACTIONS = new Set([
   'getEntries', 'createEntry', 'deleteEntry',
   'getActiveTimer', 'startTimer', 'stopTimer',
   'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
-  'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus',
+  'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus',
   'adminOverview'
 ]);
 
