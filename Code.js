@@ -1771,25 +1771,36 @@ function clearActiveTimerSheet_() {
   invalidateUserDataCache_('ActiveTimer');
 }
 
-function startTimer(taskId) {
-  const t = { taskId, startTime: iso_() };
+// Hora enviada por el cliente (UI optimista): se acepta si es válida y está a
+// menos de 10 min de la hora del servidor; nunca en el futuro. Si no, se usa 'ahora'.
+function clientTimeOrNow_(value) {
+  const now = Date.now();
+  const t = value ? new Date(value).getTime() : NaN;
+  if (isNaN(t) || Math.abs(now - t) > 10 * 60 * 1000) return new Date(now).toISOString();
+  return new Date(Math.min(t, now)).toISOString();
+}
+
+function startTimer(taskId, clientStartTime) {
+  const t = { taskId, startTime: clientTimeOrNow_(clientStartTime) };
   const s = getUserSheet_('ActiveTimer');
   if (!s) throw new Error('ActiveTimer sheet missing; bootstrap first');
-  if (s.getLastRow() > 1) s.deleteRows(2, s.getLastRow() - 1);
   s.getRange(2, 1, 1, 2).setValues([[t.taskId, t.startTime]]);
+  if (s.getLastRow() > 2) s.deleteRows(3, s.getLastRow() - 2);
   invalidateUserDataCache_('ActiveTimer');
   return t;
 }
 
 // Devuelve la entrada creada (o null si no había timer).
-function stopTimer() {
+function stopTimer(clientEndTime) {
   const timer = getActiveTimer();
   if (!timer) return null;
+  let endTime = clientTimeOrNow_(clientEndTime);
+  if (new Date(endTime) <= new Date(timer.startTime)) endTime = iso_();
   clearActiveTimerSheet_();
   return createEntry({
     taskId: timer.taskId,
     startTime: timer.startTime,
-    endTime: iso_(),
+    endTime,
     source: 'timer'
   });
 }
