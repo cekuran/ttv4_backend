@@ -1395,23 +1395,58 @@ function deleteLabel(id) {
 
 // --- Time entries ---
 function getEntries() { return readRows_('TimeEntries'); }
+// Zona horaria del usuario (IANA, enviada por el cliente); si es inválida se usa la del script.
+function resolveTz_(tz) {
+  const fallback = Session.getScriptTimeZone() || 'UTC';
+  if (!tz) return fallback;
+  try { Utilities.formatDate(new Date(), String(tz), 'yyyy'); return String(tz); }
+  catch (e) { return fallback; }
+}
+
+// Offset UTC (minutos) de la zona `tz` en el instante `date`.
+function tzOffsetMin_(date, tz) {
+  const z = Utilities.formatDate(date, tz, 'Z'); // +hhmm / -hhmm
+  const sign = z.charAt(0) === '-' ? -1 : 1;
+  return sign * (parseInt(z.substr(1, 2), 10) * 60 + parseInt(z.substr(3, 2), 10));
+}
+
+// Próxima medianoche local (en `tz`) estrictamente posterior a `date`.
+function nextLocalMidnight_(date, tz) {
+  const p = Utilities.formatDate(date, tz, 'yyyy-MM-dd').split('-').map(Number);
+  const naive = Date.UTC(p[0], p[1] - 1, p[2] + 1); // medianoche del día siguiente como si fuera UTC
+  let t = naive - tzOffsetMin_(date, tz) * 60000;
+  t = naive - tzOffsetMin_(new Date(t), tz) * 60000; // reajuste por cambio de horario (DST)
+  return new Date(t);
+}
+
+// Crea la entrada; si cruza la medianoche local se divide en una entrada por día.
+// Devuelve SIEMPRE un array de entradas creadas (en orden cronológico).
 function createEntry(payload) {
   const start = new Date(payload.startTime);
   const end   = new Date(payload.endTime);
   if (!payload.taskId) throw new Error('taskId required');
   if (isNaN(start) || isNaN(end)) throw new Error('invalid start/end time');
   if (end <= start) throw new Error('end must be after start');
-  const durationMinutes = Math.max(1, Math.round((end - start) / 60000));
-  return appendRow_('TimeEntries', {
-    id: uid_(),
-    taskId: payload.taskId,
-    startTime: start,
-    endTime: end,
-    durationMinutes,
-    source: payload.source || 'manual',
-    notes: payload.notes || '',
-    createdAt: new Date()
-  });
+  const tz = resolveTz_(payload.tz);
+  const created = [];
+  let cursor = start;
+  while (cursor < end) {
+    const mid = nextLocalMidnight_(cursor, tz);
+    const pieceEnd = mid < end ? mid : end;
+    const durationMinutes = Math.max(1, Math.round((pieceEnd - cursor) / 60000));
+    created.push(appendRow_('TimeEntries', {
+      id: uid_(),
+      taskId: payload.taskId,
+      startTime: cursor,
+      endTime: pieceEnd,
+      durationMinutes,
+      source: payload.source || 'manual',
+      notes: payload.notes || '',
+      createdAt: new Date()
+    }));
+    cursor = pieceEnd;
+  }
+  return created;
 }
 function deleteEntry(id) {
   deleteRow_('TimeEntries', id);
@@ -1790,8 +1825,8 @@ function startTimer(taskId, clientStartTime) {
   return t;
 }
 
-// Devuelve la entrada creada (o null si no había timer).
-function stopTimer(clientEndTime) {
+// Devuelve las entradas creadas (array; varias si cruza medianoche) o null si no había timer.
+function stopTimer(clientEndTime, tz) {
   const timer = getActiveTimer();
   if (!timer) return null;
   let endTime = clientTimeOrNow_(clientEndTime);
@@ -1801,7 +1836,8 @@ function stopTimer(clientEndTime) {
     taskId: timer.taskId,
     startTime: timer.startTime,
     endTime,
-    source: 'timer'
+    source: 'timer',
+    tz
   });
 }
 
