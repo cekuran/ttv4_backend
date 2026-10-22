@@ -1816,6 +1816,7 @@ function clientTimeOrNow_(value) {
 }
 
 function startTimer(taskId, clientStartTime) {
+  if (getActiveTimer()) throw new Error('Ya hay un timer activo');
   const t = { taskId, startTime: clientTimeOrNow_(clientStartTime) };
   const s = getUserSheet_('ActiveTimer');
   if (!s) throw new Error('ActiveTimer sheet missing; bootstrap first');
