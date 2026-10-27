@@ -13,7 +13,7 @@
 // `{ token }` pulled from localStorage.
 
 const SHEETS = {
-  Tasks:              ['id', 'name', 'labelId', 'completed', 'createdAt'],
+  Tasks:              ['id', 'name', 'labelId', 'completed', 'createdAt', 'subtasks'],
   Labels:             ['id', 'name', 'color',   'createdAt'],
   TimeEntries:        ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
   ActiveTimer:        ['taskId', 'startTime'],
@@ -224,7 +224,8 @@ function getUserSheet_(name) {
 // Clave por (hoja activa, nombre de hoja). Las escrituras la eliminan
 // (markUserDirty_) y el siguiente lector la vuelve a rellenar desde Sheets.
 function userCacheKey_(name) { return 'ud:' + _currentSheetId + ':' + name; }
-function schemaCacheKey_(id) { return 'schema:' + id; }
+// Subir la versión cuando cambie SHEETS para forzar el backfill de columnas nuevas.
+function schemaCacheKey_(id) { return 'schema:v2:' + id; }
 
 function markUserDirty_(name) {
   if (_currentSheetId) cacheRemove_(userCacheKey_(name));
@@ -1363,7 +1364,22 @@ function createTask(name, labelId) {
 function updateTask(id, patch) {
   if ('name' in patch) patch.name = String(patch.name).trim();
   if ('labelId' in patch) patch.labelId = patch.labelId || '';
+  if ('subtasks' in patch) patch.subtasks = sanitizeSubtasks_(patch.subtasks);
   return updateRow_('Tasks', id, patch);
+}
+// Subtareas = checklist JSON [{id,text,done}] en la columna Tasks.subtasks (sin timer ni entries).
+function sanitizeSubtasks_(raw) {
+  let list = raw;
+  if (typeof list === 'string') {
+    try { list = list ? JSON.parse(list) : []; } catch (e) { throw new Error('Subtareas inválidas'); }
+  }
+  if (!Array.isArray(list)) throw new Error('Subtareas inválidas');
+  const clean = list.slice(0, 200).map(s => ({
+    id: String((s && s.id) || uid_()).slice(0, 64),
+    text: String((s && s.text) || '').trim().slice(0, 500),
+    done: !!(s && s.done)
+  })).filter(s => s.text);
+  return clean.length ? JSON.stringify(clean) : '';
 }
 function deleteTask(id) {
   deleteRow_('Tasks', id);
