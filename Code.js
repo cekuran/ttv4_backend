@@ -13,7 +13,7 @@
 // `{ token }` pulled from localStorage.
 
 const SHEETS = {
-  Tasks:              ['id', 'name', 'labelId', 'completed', 'createdAt', 'subtasks'],
+  Tasks:              ['id', 'name', 'labelId', 'completed', 'createdAt', 'subtasks', 'notes'],
   Labels:             ['id', 'name', 'color',   'createdAt'],
   TimeEntries:        ['id', 'taskId', 'startTime', 'endTime', 'durationMinutes', 'source', 'notes', 'createdAt'],
   ActiveTimer:        ['taskId', 'startTime'],
@@ -225,7 +225,7 @@ function getUserSheet_(name) {
 // (markUserDirty_) y el siguiente lector la vuelve a rellenar desde Sheets.
 function userCacheKey_(name) { return 'ud:' + _currentSheetId + ':' + name; }
 // Subir la versión cuando cambie SHEETS para forzar el backfill de columnas nuevas.
-function schemaCacheKey_(id) { return 'schema:v2:' + id; }
+function schemaCacheKey_(id) { return 'schema:v3:' + id; }
 
 function markUserDirty_(name) {
   if (_currentSheetId) cacheRemove_(userCacheKey_(name));
@@ -1365,7 +1365,14 @@ function updateTask(id, patch) {
   if ('name' in patch) patch.name = String(patch.name).trim();
   if ('labelId' in patch) patch.labelId = patch.labelId || '';
   if ('subtasks' in patch) patch.subtasks = sanitizeSubtasks_(patch.subtasks);
-  return updateRow_('Tasks', id, patch);
+  // Prefijo "'" evita que Sheets interprete notas como fórmulas (=, +, -, @).
+  if ('notes' in patch) {
+    const n = String(patch.notes || '').slice(0, 5000);
+    patch.notes = /^[=+\-@]/.test(n) ? "'" + n : n;
+  }
+  const out = updateRow_('Tasks', id, patch);
+  if ('notes' in patch && /^'[=+\-@]/.test(out.notes)) out.notes = out.notes.slice(1);
+  return out;
 }
 // Subtareas = checklist JSON [{id,text,done}] en la columna Tasks.subtasks (sin timer ni entries).
 function sanitizeSubtasks_(raw) {
