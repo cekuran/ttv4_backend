@@ -1471,6 +1471,38 @@ function createEntry(payload) {
   }
   return created;
 }
+// Edita una entrada (timer o manual). Si el nuevo rango cruza la medianoche local,
+// la fila original conserva el primer tramo y se añaden filas para el resto.
+// Devuelve un array: [entrada actualizada, ...entradas nuevas].
+function updateEntry(id, payload) {
+  payload = payload || {};
+  const current = getEntries().find(e => String(e.id) === String(id));
+  if (!current) throw new Error('Entrada no encontrada');
+  const taskId = payload.taskId || current.taskId;
+  const start = new Date(payload.startTime || current.startTime);
+  const end   = new Date(payload.endTime || current.endTime);
+  if (isNaN(start) || isNaN(end)) throw new Error('invalid start/end time');
+  if (end <= start) throw new Error('end must be after start');
+  const notes = 'notes' in payload ? String(payload.notes || '') : (current.notes || '');
+  const tz = resolveTz_(payload.tz);
+  const result = [];
+  let cursor = start;
+  while (cursor < end) {
+    const mid = nextLocalMidnight_(cursor, tz);
+    const pieceEnd = mid < end ? mid : end;
+    const durationMinutes = Math.max(1, Math.round((pieceEnd - cursor) / 60000));
+    if (!result.length) {
+      result.push(updateRow_('TimeEntries', id, { taskId, startTime: cursor, endTime: pieceEnd, durationMinutes, notes }));
+    } else {
+      result.push(appendRow_('TimeEntries', {
+        id: uid_(), taskId, startTime: cursor, endTime: pieceEnd, durationMinutes,
+        source: current.source || 'manual', notes, createdAt: new Date()
+      }));
+    }
+    cursor = pieceEnd;
+  }
+  return result;
+}
 function deleteEntry(id) {
   deleteRow_('TimeEntries', id);
   return { ok: true, id: String(id) };
@@ -1879,7 +1911,7 @@ const API_ACTIONS = new Set([
   'cambiarMiContrasena', 'listarMisHojas', 'cambiarHojaActiva',
   'getInitialData', 'getTasks', 'createTask', 'updateTask', 'deleteTask',
   'getLabels', 'createLabel', 'updateLabel', 'deleteLabel',
-  'getEntries', 'createEntry', 'deleteEntry',
+  'getEntries', 'createEntry', 'updateEntry', 'deleteEntry',
   'getActiveTimer', 'startTimer', 'stopTimer',
   'getRoutines', 'createRoutine', 'updateRoutine', 'deleteRoutine',
   'toggleRoutineCompletion', 'setRoutineCompletions', 'getRoutineStatus', 'getDailyRoutineWeekStatus', 'getWeeklyRoutineWeekStatus', 'getMonthlyRoutineMonthStatus',
