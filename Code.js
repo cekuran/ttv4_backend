@@ -1374,18 +1374,23 @@ function updateTask(id, patch) {
   if ('notes' in patch && /^'[=+\-@]/.test(out.notes)) out.notes = out.notes.slice(1);
   return out;
 }
-// Subtareas = checklist JSON [{id,text,done}] en la columna Tasks.subtasks (sin timer ni entries).
+// Subtareas = checklist JSON [{id,text,done,due?}] en la columna Tasks.subtasks (sin timer ni entries).
 function sanitizeSubtasks_(raw) {
   let list = raw;
   if (typeof list === 'string') {
     try { list = list ? JSON.parse(list) : []; } catch (e) { throw new Error('Subtareas inválidas'); }
   }
   if (!Array.isArray(list)) throw new Error('Subtareas inválidas');
-  const clean = list.slice(0, 200).map(s => ({
-    id: String((s && s.id) || uid_()).slice(0, 64),
-    text: String((s && s.text) || '').trim().slice(0, 500),
-    done: !!(s && s.done)
-  })).filter(s => s.text);
+  const clean = list.slice(0, 200).map(s => {
+    const o = {
+      id: String((s && s.id) || uid_()).slice(0, 64),
+      text: String((s && s.text) || '').trim().slice(0, 500),
+      done: !!(s && s.done)
+    };
+    const due = String((s && s.due) || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(due)) o.due = due;
+    return o;
+  }).filter(s => s.text);
   return clean.length ? JSON.stringify(clean) : '';
 }
 function deleteTask(id) {
